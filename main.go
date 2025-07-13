@@ -14,10 +14,8 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
-type Tool interface {
-	Name() string
-	Description() api.Tool
-	Run(context.Context, api.ToolCallFunction) (api.Message, error)
+func init() {
+	defaultTools.AddTool(NewSerper())
 }
 
 func printMessage(m api.Message) string {
@@ -39,7 +37,7 @@ type Brain struct {
 	limit   int
 	client  *api.Client
 	history []api.Message
-	tools   map[string]Tool
+	tools   *toolManager
 }
 
 func NewBrain(model string, limit int) (*Brain, error) {
@@ -92,16 +90,12 @@ func (b *Brain) show() {
 }
 
 func (b *Brain) request() *api.ChatRequest {
-	tools := make(api.Tools, 0, len(b.tools))
-	for _, t := range b.tools {
-		tools = append(tools, t.Description())
-	}
 	think := true
 	stream := false
 	return &api.ChatRequest{
 		Model:    b.model,
 		Messages: b.history,
-		Tools:    tools,
+		Tools:    b.tools.List(),
 		Think:    &think,
 		Stream:   &stream,
 	}
@@ -110,11 +104,7 @@ func (b *Brain) request() *api.ChatRequest {
 func (b *Brain) callTools(ctx context.Context, calls []api.ToolCall) error {
 	responses := make([]api.Message, len(calls))
 	for i, c := range calls {
-		tool, exist := b.tools[c.Function.Name]
-		if !exist {
-			return fmt.Errorf("called non-exist tool %q", c.Function.Name)
-		}
-		res, err := tool.Run(ctx, c.Function)
+		res, err := b.tools.Call(ctx, c)
 		if err != nil {
 			return err
 		}
