@@ -9,8 +9,9 @@ back into the agent's input.
 │   Agent (pi / codex)     │   pinky (split, right)  │
 │                          │                         │
 │   agent streams...       │   tails agent session   │
-│                          │   file, shows messages  │
-│                          │   + your redirects      │
+│                          │   file, shows latest    │
+│                          │   message rendered as   │
+│                          │   markdown              │
 │                          │                         │
 │                          │   ─ compose (Ctrl+N) ─  │
 │                          │   multi-line input      │
@@ -36,8 +37,21 @@ back into the agent's input.
 
 - Go 1.22+ (built against 1.26.4)
 - `tmux` 3.0+ on `PATH`
-- `lsof` on `PATH` (for codex session discovery)
+- `lsof` on `PATH` (used for both pi and codex session discovery when
+  `PI_SESSION_FILE` is not in the process env)
 - An agent process running in the target pane: **`pi`** or **`codex`**. Other agents error out at startup.
+
+## Troubleshooting
+
+Set `PINKY_DEBUG=1` to log session-discovery diagnostics to stderr:
+
+```sh
+PINKY_DEBUG=1 pinky --target %1
+```
+
+When pinky can't find the session file, the TUI shows an error with
+diagnostic hints, including the exact commands to inspect the process
+env and open files manually.
 
 ## Install
 
@@ -80,6 +94,20 @@ pinky --target %12
 
 `%12` is the tmux pane id (shown in `tmux display-message -p '#{pane_id}'`).
 
+### Bypass pane discovery
+
+If pinky can't find the session file via `PI_SESSION_FILE` or `lsof`
+(e.g. pi running in a wrapper that strips the env, or in a container
+without shared `/proc`), point pinky at the file directly:
+
+```sh
+pinky --session-file ~/.pi/sessions/abc.jsonl
+```
+
+The file format (pi vs. codex JSONL) is auto-detected from the first
+line. Combine with `--target` if you want inject back into a specific
+pane; otherwise compose stays local.
+
 ### As a split-pane
 
 Inside a tmux session, split a pane and start pinky there:
@@ -102,35 +130,60 @@ always shown unless `--target` is passed.
 | `Enter` | Newline (in compose) |
 | `Ctrl+S` | Send the redirect to the agent |
 | `Esc` | Cancel compose |
-| `Ctrl+R` | Manual refresh: clear scrollback and re-capture |
-| `PgUp` / `PgDn` | Scroll scrollback |
+| `Ctrl+R` | Re-poll the agent session |
 | `Ctrl+C` | Quit |
+
+The main view shows the latest complete agent message as rendered
+markdown. Within that message:
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Line down / up |
+| `}` / `{` | Next / previous block |
+| `]]` / `[[` | Next / previous heading |
+| `gg` | Top of message |
+| `G` | Bottom of message |
+| `PgUp` | Top of message |
+| `PgDn` | Next block |
+| `↑` / `↓` | Aliases for `j` / `k` |
+
+The currently-focused block is marked by horizontal border lines above
+and below it.
 
 ## History
 
-Every captured agent line and every sent redirect is appended to:
+Every surfaced agent message and every user-sent redirect is appended
+to:
 
 - `$XDG_DATA_HOME/pinky/history.jsonl`, or
 - `~/.local/share/pinky/history.jsonl`
 
-On startup, prior history for the target pane is re-seeded into the
-scrollback view.
+History is append-only. On startup, pinky does not reload prior
+history into the view — the main view starts fresh and shows only the
+latest message from the live session.
 
 ## How it works
 
-1. Pinky reads `#{pane_pid}` from the target tmux pane and walks its
-   descendant processes (`pgrep -P`, `ps -c -o comm=`) until it finds
-   one named `pi` or `codex`.
-2. For `pi`, it reads the `PI_SESSION_FILE` env var from the pi process
-   (`/proc/<pid>/environ` on Linux, `ps wwE` on macOS) and tails that
-   JSONL file.
-3. For `codex`, it uses `lsof -p <pid>` to find the open session JSONL
-   under `~/.codex/sessions/` and tails that.
+1. Pinky reads `#{pane_pid}` and `#{pane_current_path}` from the
+   target tmux pane and walks its descendant processes (`pgrep -P`,
+   `ps -c -o comm=`) until it finds one named `pi` or `codex`.
+2. For `pi`, the session file is discovered in this order:
+   - `PI_SESSION_FILE` env var (canonical pi-mono convention), or
+   - cwd-based lookup: `<agent_dir>/sessions/--<encoded cwd>--/<timestamp>_<uuid>.jsonl`
+     where `<agent_dir>` is `$PI_CODING_AGENT_DIR` (default `~/.pi/agent`)
+     or `$PI_CODING_AGENT_SESSION_DIR`, or
+   - `lsof -p <pid>` to find an open `.jsonl` (last resort).
+3. For `codex`, the session file is discovered in this order:
+   - cwd-based lookup under `$CODEX_HOME/sessions/` (default `~/.codex`)
+     for `rollout-<timestamp>-<uuid>.jsonl`, newest across all date
+     subdirs, or
+   - `lsof -p <pid>` to find an open `.jsonl` under the sessions root.
 4. Each poll, only newly-appended JSONL lines are parsed and surfaced as
    assistant messages (text content only — tool calls and thinking blocks
    are filtered at parse time).
 5. User redirects are appended to the agent pane via tmux paste-buffer +
    send-keys Enter.
+
 
 ## Out of scope (v0)
 
@@ -140,7 +193,7 @@ scrollback view.
 - Multi-pane watching
 - "Agent done speaking" detection / notifications
 - Tool call and thinking block rendering (filtered out at parse time)
-- Markdown rendering, templates, slash-commands
+- Templates, slash-commands
 - Config file
 
 ## License

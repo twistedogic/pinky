@@ -22,30 +22,42 @@ const (
 
 func main() {
 	target := flag.String("target", "", "tmux pane id to watch (skips the picker)")
+	sessionFile := flag.String("session-file", "", "explicit path to the agent's session JSONL (skips PI_SESSION_FILE / lsof discovery)")
 	flag.Parse()
 
+	// tmux is a hard prerequisite (we shell out to it constantly).
+	// If it's not running, exit before constructing any TUI state —
+	// there's no useful TUI to show.
 	if err := tmux.RequireServer(); err != nil {
 		fail(err)
 	}
 
 	model := newModel()
-	if *target != "" {
+	if *sessionFile != "" {
+		if err := model.attachWithFile(*sessionFile); err != nil {
+			model.err = err
+			model.state = stateError
+		}
+	} else if *target != "" {
 		pane, err := resolveTarget(*target)
 		if err != nil {
-			fail(err)
-		}
-		if err := model.attach(pane); err != nil {
-			fail(err)
+			model.err = err
+			model.state = stateError
+		} else if err := model.attach(pane); err != nil {
+			model.err = err
+			model.state = stateError
 		}
 	} else {
 		agents, err := session.ListAgents()
 		if err != nil {
-			fail(err)
+			model.err = err
+			model.state = stateError
+		} else if len(agents) == 0 {
+			model.err = errors.New("no active pi or codex agents found in any tmux pane")
+			model.state = stateError
+		} else {
+			model.setAgents(agents)
 		}
-		if len(agents) == 0 {
-			fail(errors.New("no active pi or codex agents found in any tmux pane"))
-		}
-		model.setAgents(agents)
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
@@ -68,6 +80,9 @@ func resolveTarget(flagVal string) (string, error) {
 	return pane, nil
 }
 
+// fail prints to stderr and exits. Used only for unrecoverable startup
+// errors where no TUI can render (tmux not running, bubbletea itself
+// failing to start).
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "pinky:", err)
 	os.Exit(1)

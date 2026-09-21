@@ -6,10 +6,12 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,50 @@ type Message struct {
 type Source interface {
 	NewMessages() ([]Message, error)
 	Close() error
+}
+
+// OpenFile opens a Source from an explicit JSONL path. Used as the
+// --session-file escape hatch when pane-based discovery can't find the
+// file. The format is auto-detected: pi-style JSONL is parsed by
+// extractPi, codex-style JSONL by the codex parser; we pick whichever
+// produces a parseable first line. ponytail: a smarter detection could
+// sniff the first line; revisit if pi and codex diverge.
+func OpenFile(path string) (Source, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open session file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	// Read the first non-empty line to detect format.
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	var firstLine []byte
+	for sc.Scan() {
+		firstLine = sc.Bytes()
+		break
+	}
+	if firstLine == nil {
+		return nil, fmt.Errorf("session file %q is empty", path)
+	}
+
+	var raw struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type string `json:"type"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(firstLine, &raw); err != nil {
+		return nil, fmt.Errorf("session file %q: not valid JSONL: %w", path, err)
+	}
+	switch raw.Type {
+	case "message":
+		return &piSource{path: path}, nil
+	case "response_item":
+		return &codexSource{path: path}, nil
+	default:
+		return nil, fmt.Errorf("session file %q: unrecognized format (type=%q)", path, raw.Type)
+	}
 }
 
 // ErrUnsupportedAgent is returned when the pane's agent isn't pi or codex.
@@ -96,14 +142,26 @@ func Open(tmuxPane string) (Source, error) {
 	if err != nil {
 		return nil, err
 	}
+	cwd, _ := paneCwd(tmuxPane) // best-effort; cwd-based discovery is one of several fallbacks
 	switch agent.name {
 	case "pi":
-		return openPi(agent.pid)
+		return openPi(agent.pid, cwd)
 	case "codex":
-		return openCodex(agent.pid)
+		return openCodex(agent.pid, cwd)
 	default:
 		return nil, fmt.Errorf("%w: found %q", ErrUnsupportedAgent, agent.name)
 	}
+}
+
+// paneCwd returns the current working directory of the given tmux pane,
+// via `tmux display-message -p '#{pane_current_path}'`. Empty string on
+// error (caller should treat as "cwd unknown" rather than failing).
+func paneCwd(tmuxPane string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-t", tmuxPane, "-p", "#{pane_current_path}").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 type procInfo struct {
@@ -218,8 +276,13 @@ func readEnvs(pid int) (map[string]string, error) {
 	return envs, nil
 }
 
-// readPIDEnvs reads /proc/<pid>/environ (Linux fast path). Empty on macOS.
+// readPIDEnvs reads /proc/<pid>/environ (Linux fast path). Returns nil
+// on any non-Linux platform or when the file is unreadable, so the
+// caller falls through to readEnvs (ps wwE).
 func readPIDEnvs(pid int) map[string]string {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
 	if err != nil {
 		return nil

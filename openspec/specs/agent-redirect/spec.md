@@ -3,9 +3,7 @@
 ## Purpose
 
 TBD
-
 ## Requirements
-
 ### Requirement: Show session picker at startup
 The system SHALL start by enumerating all tmux panes whose process tree contains a pi or codex agent, and present them in a picker. The user selects one with arrow keys + Enter; pinky then transitions to its running state bound to that pane.
 
@@ -41,15 +39,15 @@ The system SHALL detect which agent is running in the target tmux pane (pi or co
 - **THEN** pinky opens that codex process's active session file (via `lsof`) under `~/.codex/sessions/` and begins tailing it
 
 ### Requirement: Tail agent session JSONL
-The system SHALL continuously tail the agent's session JSONL file and surface new assistant messages in the TUI scrollback within one second of their appearance. Implementation tracks a per-source byte offset and only returns content appended since the previous poll.
+The system SHALL continuously tail the agent's session JSONL file and surface new assistant messages in the latest-message view within one second of their appearance. Implementation tracks a per-source byte offset and only returns content appended since the previous poll.
 
 #### Scenario: New assistant text appears
 - **WHEN** the agent appends a new assistant text message to its session file
-- **THEN** the message appears in pinky's scrollback view
+- **THEN** the message replaces the current message in the latest-message view
 
 #### Scenario: Polling yields no new content
 - **WHEN** no new lines have been appended to the session file
-- **THEN** pinky does not modify the scrollback
+- **THEN** pinky does not modify the latest-message view
 
 #### Scenario: pi message with thinking + toolCall + text
 - **WHEN** pi writes a message entry whose `content` array contains `thinking`, `toolCall`, and `text` blocks
@@ -61,7 +59,7 @@ The system SHALL continuously tail the agent's session JSONL file and surface ne
 
 #### Scenario: Manual refresh via Ctrl+R
 - **WHEN** the user presses `Ctrl+R` in idle state
-- **THEN** the in-memory scrollback is cleared and the session source re-polled from its current offset
+- **THEN** the session source is re-polled from its current offset and the latest-message view is refreshed with any newly surfaced content
 
 ### Requirement: Compose multi-line redirect
 The system SHALL provide a multi-line text input area where the user composes a redirect message. `Enter` inserts a newline; `Ctrl+S` sends.
@@ -90,11 +88,11 @@ The system SHALL inject composed text into the target tmux pane using `tmux set-
 - **THEN** the entire text including newlines appears verbatim in the target pane's input
 
 ### Requirement: Persist and restore history
-The system SHALL append every surfaced agent line and every user-sent redirect to a JSONL history file at `$XDG_DATA_HOME/pinky/history.jsonl` (fallback `~/.local/share/pinky/history.jsonl`). On startup, existing history SHALL be loaded into the scrollback.
+The system SHALL append every surfaced assistant message and every user-sent redirect to a JSONL history file at `$XDG_DATA_HOME/pinky/history.jsonl` (fallback `~/.local/share/pinky/history.jsonl`). On startup, existing history SHALL NOT be loaded into the scrollback view — pinky starts fresh and surfaces only newly-arriving content from the live session.
 
 #### Scenario: Restart continuity
 - **WHEN** `pinky` restarts
-- **THEN** the scrollback view SHALL be seeded from the existing history file before live polling begins
+- **THEN** the latest-message view starts empty (or with the placeholder) and waits for the next assistant message from the live session; existing history is NOT seeded into the view
 
 #### Scenario: History entry schema
 - **WHEN** a line is recorded
@@ -110,3 +108,4 @@ The system SHALL require a running tmux server and a target pane at startup. tmu
 #### Scenario: Target pane missing
 - **WHEN** the resolved target pane ID does not exist
 - **THEN** pinky exits with a message naming the missing pane
+

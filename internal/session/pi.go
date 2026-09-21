@@ -5,8 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
+
+// debug controls whether session-discovery diagnostics are printed to
+// stderr. Enabled by the PINKY_DEBUG env var. Off by default.
+func debug() bool {
+	return os.Getenv("PINKY_DEBUG") != ""
+}
+
+func debugf(format string, args ...any) {
+	if debug() {
+		fmt.Fprintf(os.Stderr, "pinky: "+format+"\n", args...)
+	}
+}
 
 // piSource tails a pi agent session JSONL file.
 type piSource struct {
@@ -14,15 +29,131 @@ type piSource struct {
 	offset int64
 }
 
-func openPi(pid int) (*piSource, error) {
-	path, ok := envValue(pid, "PI_SESSION_FILE")
-	if !ok || path == "" {
-		return nil, fmt.Errorf("pi process %d: PI_SESSION_FILE not set", pid)
+func openPi(pid int, cwd string) (*piSource, error) {
+	// 1. PI_SESSION_FILE is the canonical fast path.
+	if path, ok := envValue(pid, "PI_SESSION_FILE"); ok && path != "" {
+		if _, err := os.Stat(path); err == nil {
+			debugf("openPi(%d): using PI_SESSION_FILE=%s", pid, path)
+			return &piSource{path: path}, nil
+		}
+		debugf("openPi(%d): PI_SESSION_FILE set but stat failed", pid)
+	} else {
+		debugf("openPi(%d): PI_SESSION_FILE not set in env", pid)
 	}
-	if _, err := os.Stat(path); err != nil {
-		return nil, fmt.Errorf("pi session file %q: %w", path, err)
+	// 2. cwd-based discovery (pi-mono convention, used by plannotator):
+	//    <sessions>/--<encoded cwd>--/<timestamp>_<uuid>.jsonl
+	//    This is reliable because the pane's cwd is what pi uses to
+	//    pick the bucket directory.
+	if cwd != "" {
+		if path, err := openPiByCwd(cwd); err == nil {
+			debugf("openPi(%d): discovered via cwd %s: %s", pid, cwd, path)
+			return &piSource{path: path}, nil
+		} else {
+			debugf("openPi(%d): cwd-based discovery failed: %v", pid, err)
+		}
 	}
-	return &piSource{path: path}, nil
+	// 3. Last resort: lsof on the process. Some setups (containers,
+	//    wrapped agents) keep the session file open even when the cwd
+	//    bucket is empty or mis-located.
+	if path, err := piSessionFile(pid); err == nil {
+		debugf("openPi(%d): discovered via lsof: %s", pid, path)
+		return &piSource{path: path}, nil
+	} else {
+		debugf("openPi(%d): lsof fallback failed: %v", pid, err)
+	}
+	return nil, fmt.Errorf("pi process %d: no session file found\n\n"+
+		"troubleshooting:\n"+
+		"  - PI_SESSION_FILE not set in the process env\n"+
+		"  - cwd-based lookup under %s found nothing\n"+
+		"  - lsof on pid %d found no open .jsonl\n"+
+		"  - run with PINKY_DEBUG=1 for verbose discovery output\n"+
+		"  - bypass with --session-file /path/to/session.jsonl",
+		pid, piAgentDirOrDefault(), pid)
+}
+
+func piAgentDirOrDefault() string {
+	dir, err := piSessionDir()
+	if err != nil {
+		return "<unresolved>"
+	}
+	return dir
+}
+
+// openPiByCwd finds pi's session file via the cwd-based convention
+// (see plannotator's pi discovery). Bucket directory:
+// `<sessions>/--<encoded cwd>--/`. Newest .jsonl wins.
+func openPiByCwd(cwd string) (string, error) {
+	sessions, err := piSessionDir()
+	if err != nil {
+		return "", err
+	}
+	bucket := filepath.Join(sessions, piEncodedDir(cwd))
+	return newestJSONL(bucket)
+}
+
+// piSessionFile finds an open .jsonl session file for pid by parsing
+// `lsof` output. Picks the most recently modified match.
+func piSessionFile(pid int) (string, error) {
+	cmd := exec.Command("lsof", "-p", fmt.Sprintf("%d", pid), "-a", "-F", "n")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("lsof failed (is lsof installed?): %w", err)
+	}
+	if debug() {
+		debugf("lsof -p %d (raw):\n%s", pid, indent(string(out)))
+	}
+	got := parseLsofJSONL(string(out))
+	if got == "" {
+		return "", fmt.Errorf("no .jsonl session file open (PI_SESSION_FILE not set and no .jsonl file is open)")
+	}
+	if _, err := os.Stat(got); err != nil {
+		return "", fmt.Errorf("lsof-discovered session %q: %w", got, err)
+	}
+	return got, nil
+}
+
+func indent(s string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		b.WriteString("    " + line + "\n")
+	}
+	return b.String()
+}
+
+// parseLsofJSONL extracts the most recently modified .jsonl file path
+// from `lsof -F n` output. Lines not starting with `n` are skipped.
+// The `n` prefix is stripped; the rest is taken as the path. Files
+// that don't exist on disk are skipped.
+//
+// Exposed at package scope so tests can drive the parser without
+// spawning real processes.
+func parseLsofJSONL(lsofOut string) string {
+	var best string
+	var bestMod time.Time
+	sc := bufio.NewScanner(strings.NewReader(lsofOut))
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "n") {
+			continue
+		}
+		path := strings.TrimPrefix(line, "n")
+		if !strings.HasSuffix(path, ".jsonl") {
+			continue
+		}
+		if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, string(filepath.Separator)) {
+			// Defensive: skip relative paths that lsof shouldn't emit.
+			continue
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if best == "" || fi.ModTime().After(bestMod) {
+			best = path
+			bestMod = fi.ModTime()
+		}
+	}
+	return best
 }
 
 func (s *piSource) NewMessages() ([]Message, error) {
