@@ -17,7 +17,7 @@ import (
 // readable AND the help line must be present below it.
 func TestHelp_AlwaysVisibleInIdleView(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
@@ -27,9 +27,9 @@ func TestHelp_AlwaysVisibleInIdleView(t *testing.T) {
 		t.Errorf("agent message should remain visible; got first 200 chars:\n%q",
 			plain[:min(len(plain), 200)])
 	}
-	// Short help includes the Compose binding.
-	if !strings.Contains(plain, "compose") {
-		t.Errorf("expected short help to mention 'compose' in idle view; got:\n%q",
+	// Short help includes the nav binding description.
+	if !strings.Contains(plain, "nav") {
+		t.Errorf("expected short help to mention 'nav' in idle view; got:\n%q",
 			plain)
 	}
 }
@@ -75,7 +75,7 @@ func TestHelp_AlwaysVisibleInErrorView(t *testing.T) {
 // rendered in View() is the multi-column version when toggled on.
 func TestHelp_QuestionMarkTogglesFullHelp(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.refreshViewport()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
@@ -85,35 +85,38 @@ func TestHelp_QuestionMarkTogglesFullHelp(t *testing.T) {
 	}
 	view := got.View()
 	plain := stripANSI(view)
-	// Full help exposes groups that the short help truncates away:
-	// "next comment", "prev comment", etc.
-	if !strings.Contains(plain, "next comment") {
-		t.Errorf("full help should surface the comments group; got:\n%q", plain)
+	// Full help exposes the nav binding description. With the
+	// collapsed keymap the nav is one group; assert on the nav
+	// binding's full descriptor text.
+	if !strings.Contains(plain, "j k h l v c s q r n") {
+		t.Errorf("full help should surface the nav group's full descriptor; got:\n%q", plain)
 	}
 }
 
-// TestVisual_StatusLineIndicatesActive: pressing V in idle must be
-// visible — visual mode flips Mode to SelLine but the viewport
+// TestVisual_StatusLineIndicatesActive: pressing `v` in nav must be
+// visible — visual mode flips Mode to NavLine but the viewport
 // doesn't otherwise change, so the status line carries a "VISUAL"
-// chip. Without this chip the user has no way to tell the keystroke
-// was registered.
+// chip. The chip is rendered with a background style and stripped
+// ANSI shows it as a leading-space-prefixed block; assert on the
+// status-line substring specifically, not the whole view (the help
+// footer mentions "v visual" too, which is unrelated).
 func TestVisual_StatusLineIndicatesActive(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello"}
 	m.refreshViewport()
 	m.reflow()
 
-	plain := stripANSI(m.View())
-	if strings.Contains(strings.ToUpper(plain), "VISUAL") {
-		t.Fatalf("VISUAL indicator should not be present before V; got:\n%s", plain)
+	statusBefore := m.statusLine()
+	if strings.Contains(strings.ToUpper(statusBefore), "VISUAL") {
+		t.Fatalf("VISUAL indicator should not be present before v; got status:\n%s", statusBefore)
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
 	got := updated.(model)
-	plain = stripANSI(got.View())
-	if !strings.Contains(plain, "VISUAL") {
-		t.Errorf("View should contain VISUAL indicator after V; got:\n%s", plain)
+	statusAfter := got.statusLine()
+	if !strings.Contains(statusAfter, "VISUAL") {
+		t.Errorf("status line should contain VISUAL indicator after v; got:\n%s", statusAfter)
 	}
 }
 
@@ -124,7 +127,7 @@ func TestVisual_StatusLineIndicatesActive(t *testing.T) {
 // captures what was sent.
 func TestSubmitComments_ClearsOnSuccess(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# title\n\nbody one"}
 	m.refreshViewport()
 
@@ -161,7 +164,7 @@ func TestSubmitComments_ClearsOnSuccess(t *testing.T) {
 // churn.
 func TestSubmitComments_NoCommentsNoop(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello"}
 	m.refreshViewport()
 
@@ -182,42 +185,34 @@ func TestSubmitComments_NoCommentsNoop(t *testing.T) {
 	}
 }
 
-// TestVisual_BracketMovesHighlight: in visual mode, } must move the
-// cursor to the next block AND the heavy-border highlight must
-// follow. Without this the user has no feedback that the keystroke
-// did anything — pressing } either scrolls a viewport line or does
-// nothing, depending on which switch arm wins.
-func TestVisual_BracketMovesHighlight(t *testing.T) {
+// TestVisual_JMovesCursorAcrossBlocks: in nav mode, `j` advances
+// the cursor to the next block and the cyan left-gutter follows.
+// Per design D1 the cursor is the single source of truth — no
+// separate visual.cursor.
+func TestVisual_JMovesCursorAcrossBlocks(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
-	// Three short blocks: two single-line headings with a paragraph
-	// between, so } has somewhere obvious to land.
+	m.state = stateNav
+	// Three short blocks: two headings with a paragraph between so
+	// `j` has somewhere obvious to land.
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# alpha\n\nbody one\n\n## beta\n\nbody two"}
 	m.refreshViewport()
 	m.reflow()
 	if len(m.blocks) < 3 {
 		t.Fatalf("setup: expected at least 3 blocks, got %d", len(m.blocks))
 	}
+	startBlock := m.cursor.BlockIdx
 
-	// Enter visual mode.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(model)
-	startBlock := m.visual.CurBlock
-
-	// Press } — cursor should jump to the next block.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'}'}})
-	m = updated.(model)
-	if m.visual.CurBlock <= startBlock {
-		t.Errorf("} did not advance CurBlock: before=%d after=%d", startBlock, m.visual.CurBlock)
+	if m.cursor.BlockIdx <= startBlock {
+		t.Errorf("j did not advance cursor block: before=%d after=%d", startBlock, m.cursor.BlockIdx)
 	}
 
-	// The cyan left-gutter (▍) should now bracket the new focused
-	// block's lines, NOT the previous block's. injectGutter writes
-	// one gutter char per line so we check that every line inside
-	// the new block starts with ▍ and the previous block's lines
-	// do not.
+	// Cyan left-gutter (▍) follows the cursor's block — every line
+	// inside the new block starts with ▍, the previous block's
+	// lines do not.
 	plain := stripANSI(m.View())
-	focused := m.blocks[m.visual.CurBlock]
+	focused := m.blocks[m.cursor.BlockIdx]
 	prev := m.blocks[startBlock]
 	for i := focused.StartLine; i <= focused.EndLine; i++ {
 		line := lineAt(plain, i)
@@ -236,49 +231,54 @@ func TestVisual_BracketMovesHighlight(t *testing.T) {
 	}
 }
 
-// TestVisual_JMovesCursorWithinBlock: in visual mode, j must advance
-// the visual cursor (not scroll the viewport by one line). Without
-// this the user can't move the cursor at all while in visual mode,
-// because the idle-view LineDown binding eats the key first.
-func TestVisual_JMovesCursorWithinBlock(t *testing.T) {
+// TestVisual_VEnterThenJ_KeepsVisualActive: `v` then `j` keeps
+// visual mode active while moving the cursor. Per design D2 the
+// state machine updates the visual flag and the cursor in one
+// call; the model then refreshes the viewport so the highlight
+// reflects the new cursor position.
+func TestVisual_VEnterThenJ_KeepsVisualActive(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
-	// A block long enough that j has somewhere to go without leaving it.
+	m.state = stateNav
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# title\n\nline one\nline two\nline three"}
 	m.refreshViewport()
 	m.reflow()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
 	m = updated.(model)
-	before := m.visual.Cursor
+	if m.nav.Visual != render.NavLine {
+		t.Fatal("v should enter visual")
+	}
+	before := m.cursor.BlockIdx
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(model)
-	if m.visual.Cursor <= before {
-		t.Errorf("j did not advance visual cursor: before=%d after=%d", before, m.visual.Cursor)
+	if m.nav.Visual != render.NavLine {
+		t.Errorf("j in visual should keep visual active; got %v", m.nav.Visual)
+	}
+	if m.cursor.BlockIdx <= before {
+		t.Errorf("j did not advance cursor: before=%d after=%d", before, m.cursor.BlockIdx)
 	}
 }
 
 // TestHelp_FullHelpHeightReservesSpace: when ShowAll is on, the
 // viewport is shortened by the largest group's row count, so the
-// help footer doesn't overlap the agent message.
+// help footer doesn't overlap the agent message. The collapsed
+// nav keymap has one help binding (NavGroup), so the full help
+// height matches the short help height (1 row). The guard below
+// still validates that the help height calculation produces a
+// non-negative value that does not exceed the terminal height.
 func TestHelp_FullHelpHeightReservesSpace(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.width = 80
 	m.height = 24
 	m.reflow()
-	shortVP := m.viewport.Height
 
-	m.help.ShowAll = true
-	m.reflow()
-	fullVP := m.viewport.Height
-
-	if fullVP >= shortVP {
-		t.Errorf("expected viewport to shrink when help expands; short=%d full=%d", shortVP, fullVP)
+	if got := m.helpHeight(); got < 1 {
+		t.Errorf("helpHeight() = %d, expected >=1", got)
 	}
-	if got := m.helpHeight(); got < 2 {
-		t.Errorf("helpHeight() = %d, expected >=2 for full help", got)
+	if m.viewport.Height <= 0 {
+		t.Errorf("viewport height collapsed to %d", m.viewport.Height)
 	}
 }
 
@@ -287,13 +287,14 @@ func TestHelp_FullHelpHeightReservesSpace(t *testing.T) {
 // comment-composer, where `?` would steal the keystroke).
 func TestShortHelp_PerStateCurated(t *testing.T) {
 	cases := []struct {
-		state    state
-		wantIn   []string
-		wantMax  int
+		state   state
+		wantIn  []string
+		wantMax int
 	}{
 		{statePicking, []string{"toggle help"}, 6},
-		{stateIdle, []string{"compose", "toggle help"}, 6},
-		{stateCompose, []string{"send", "toggle help"}, 6},
+		{stateNav, []string{"nav", "toggle help"}, 6},
+		{stateCompose, []string{"include comments", "cancel", "toggle help"}, 6},
+		{stateCommentComposer, []string{"save", "cancel"}, 4},
 		{stateError, []string{"dismiss"}, 3},
 	}
 	for _, c := range cases {
@@ -321,11 +322,9 @@ func TestFullHelp_CoversStateSpecificKeys(t *testing.T) {
 		wantIn []string
 	}{
 		{statePicking, []string{"up", "down", "select", "toggle help"}},
-		{stateIdle, []string{"line down", "line up", "next block",
-			"prev block", "bottom", "compose", "mark", "visual",
-			"edit comment", "delete comment", "next comment",
-			"prev comment", "refresh", "quit", "toggle help"}},
-		{stateCompose, []string{"send", "newline", "include comments", "cancel", "toggle help"}},
+		{stateNav, []string{"nav", "toggle help"}},
+		{stateCompose, []string{"newline", "include comments", "cancel", "toggle help"}},
+		{stateCommentComposer, []string{"save", "cancel"}},
 	}
 	for _, c := range cases {
 		m := newIdleModelForKeymap(t)

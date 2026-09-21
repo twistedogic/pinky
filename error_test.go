@@ -18,7 +18,7 @@ func TestAttachFailure_ShowsErrorInTUI(t *testing.T) {
 	// quitting.
 	m := newModel()
 	m.agents = []session.AgentSession{{Session: "s", Window: "0", Pane: "0", PaneID: "%999", Agent: "pi"}}
-	m.cursor = 0
+	m.pickCursor = 0
 	m.width = 80
 	m.height = 24
 	m.state = statePicking

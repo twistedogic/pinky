@@ -5,142 +5,156 @@ TBD - created by archiving change add-block-and-inline-comments. Update Purpose 
 
 ## Requirements
 
-### Requirement: Visual block-level annotation
+### Requirement: Block-level annotation via `c`
 
-The system SHALL allow the user to attach a free-text comment to the
-currently-focused block in the idle view. Pressing `m` while a block is
-focused SHALL open a comment composer pre-anchored to that block.
-Saving the composer (Ctrl+S) SHALL store the comment with anchor
-`(BlockIdx, -1, -1)` (block-level only, no inline byte offsets) and
-return to the idle view. Cancelling (Esc) SHALL discard the composer
-text and return to the idle view without creating a comment.
+The system SHALL allow the user to attach a free-text comment to
+the currently-focused block in the nav view. Pressing `c` in nav
+while a block is focused SHALL open a comment composer
+pre-anchored to that whole block (anchor `(BlockIdx, 0,
+len(Source))`). Saving the composer (`Ctrl+S`) SHALL store the
+comment with anchor `(BlockIdx, -1, -1)` (block-level sentinel
+for "no inline byte offsets") and return to the nav view.
+Cancelling (`Esc`) SHALL discard the composer text and return to
+the nav view without creating a comment.
 
-#### Scenario: Mark current block opens composer
+#### Scenario: `c` opens composer for current block
 
-- **WHEN** the user presses `m` in idle state and a block is focused
-- **THEN** the TUI enters comment composer state with the composer
-  textarea focused and empty
+- **WHEN** the user presses `c` in `stateNav` and a block is
+  focused
+- **THEN** the TUI enters comment composer state with the
+  composer textarea focused and empty
 
 #### Scenario: Save creates a block-level comment
 
-- **WHEN** the user is in comment composer state with text in the
-  textarea and presses Ctrl+S
-- **THEN** a comment is stored with anchor `(BlockIdx, -1, -1)` where
-  `BlockIdx` is the index of the currently-focused block, the TUI
-  returns to idle state, and the block becomes flagged as commented
+- **WHEN** the user is in comment composer state with text in
+  the textarea and presses `Ctrl+S`
+- **THEN** a comment is stored with anchor `(BlockIdx, -1, -1)`
+  where `BlockIdx` is the index of the currently-focused block,
+  the TUI returns to nav state, and the block becomes flagged as
+  commented
 
 #### Scenario: Cancel discards composer
 
-- **WHEN** the user is in comment composer state and presses Esc
-- **THEN** no comment is stored, the TUI returns to idle state, and
-  the previously-focused block is unchanged
+- **WHEN** the user is in comment composer state and presses `Esc`
+- **THEN** no comment is stored, the TUI returns to nav state,
+  and the previously-focused block is unchanged
 
-#### Scenario: Mark with no focused block is a no-op
+#### Scenario: `c` with no focused block is a no-op
 
-- **WHEN** the user presses `m` in idle state and no block is
-  currently focused (empty state or YOffset outside any block)
-- **THEN** the TUI remains in idle state and no composer is opened
+- **WHEN** the user presses `c` in `stateNav` and no block is
+  currently focused (empty state or cursor outside any block)
+- **THEN** the TUI remains in `stateNav` and no composer is
+  opened
 
-### Requirement: Visual inline line selection
+### Requirement: Character-granularity visual selection
 
-The system SHALL provide a vim-style visual line mode for selecting a
-contiguous range of rendered lines within a single block. Pressing
-`V` in idle state SHALL enter visual line mode and park both the
-anchor and cursor at the rendered line containing the viewport's
-top YOffset. While in visual mode, `j` SHALL extend the cursor down
-by one rendered line, `k` SHALL extend the cursor up by one rendered
-line, `}` SHALL extend the cursor down to the first line of the next
-block, and `{` SHALL extend the cursor up to the first line of the
-previous block. Pressing `Esc` SHALL exit visual mode without saving.
-Pressing `c` SHALL open the comment composer pre-anchored to the
-selected line range.
+The system SHALL provide a character-granularity visual mode for
+selecting a byte range within a block. Pressing `v` in `stateNav`
+SHALL enter visual mode and seed both the selection's anchor and
+cursor at the cursor's current `(blockIdx, charPos)`. While in
+visual mode, `h` SHALL retreat the cursor one rune within the
+block, `l` SHALL advance the cursor one rune, `j` SHALL extend
+the selection to the destination block's start byte, and `k`
+SHALL retreat to the previous block's start byte. Pressing `Esc`
+or `v` again SHALL exit visual mode without saving. Pressing `c`
+SHALL open the comment composer pre-anchored to the selection
+range `(selection.blockIdx, selection.charA, selection.charC)`.
 
-#### Scenario: V enters visual mode at current line
+#### Scenario: `v` enters visual at the cursor
 
-- **WHEN** the user presses `V` in idle state
-- **THEN** the TUI enters visual line mode with both anchor and
-  cursor set to the rendered line containing the viewport's current
-  YOffset
+- **WHEN** the user presses `v` in `stateNav`
+- **THEN** the TUI enters visual line mode with the selection
+  anchored at the cursor's current `(blockIdx, charPos)`
 
-#### Scenario: j extends visual cursor down
+#### Scenario: `l` extends visual cursor right
 
-- **WHEN** the user is in visual line mode and presses `j`
-- **THEN** the visual cursor moves down by one rendered line and the
-  selected range is highlighted accordingly
+- **WHEN** the user is in visual mode and presses `l`
+- **THEN** the selection's `charC` advances by the byte length of
+  the rune at the current `charC` offset (clamped at
+  `len(block.Source)`)
 
-#### Scenario: k extends visual cursor up
+#### Scenario: `h` extends visual cursor left
 
-- **WHEN** the user is in visual line mode and presses `k`
-- **THEN** the visual cursor moves up by one rendered line and the
-  selected range is highlighted accordingly
+- **WHEN** the user is in visual mode and presses `h`
+- **THEN** the selection's `charC` retreats by the byte length of
+  the rune preceding the current offset (clamped at `0`)
 
-#### Scenario: } extends visual cursor by block
+#### Scenario: `j` extends visual selection across blocks
 
-- **WHEN** the user is in visual line mode and presses `}` and there
-  is a next block
-- **THEN** the visual cursor moves to the first rendered line of the
-  next block
+- **WHEN** the user is in visual mode and presses `j`
+- **THEN** the cursor advances to the next block, the selection's
+  `blockIdx` is updated to the new block, and `charC` is `0` (the
+  start of the new block's source); the selection now spans the
+  anchor to the start of the destination block
 
-#### Scenario: Esc exits visual mode without saving
+#### Scenario: `Esc` exits visual without saving
 
-- **WHEN** the user is in visual line mode and presses `Esc`
-- **THEN** the TUI returns to idle state, the visual cursor and
-  anchor are cleared, and no comment is stored
+- **WHEN** the user is in visual mode and presses `Esc`
+- **THEN** the TUI returns to nav state, the visual flag and
+  selection are cleared, and no comment is stored
 
-#### Scenario: c opens composer for selection
+#### Scenario: `v` toggles visual off
 
-- **WHEN** the user is in visual line mode and presses `c`
-- **THEN** the TUI enters comment composer state with the composer
-  textarea focused and empty, and the saved anchor is the line
-  range currently selected
+- **WHEN** the user is in visual mode and presses `v` again
+- **THEN** the TUI exits visual mode (same effect as `Esc`)
+
+#### Scenario: `c` over a selection opens the composer
+
+- **WHEN** the user is in visual mode and presses `c`
+- **THEN** the TUI enters comment composer state with the
+  composer textarea focused and empty, and the saved anchor is
+  the selection range `(selection.blockIdx, selection.charA,
+  selection.charC)`
 
 ### Requirement: Inline selection anchors by byte offset
 
-When the comment composer is opened from visual line mode, the saved
-anchor SHALL be `(BlockIdx, CharStart, CharEnd)` where `BlockIdx` is
-the index of the block containing the selection, `CharStart` is the
-byte offset into the original assistant message text corresponding to
-the anchor line, and `CharEnd` is the byte offset into the original
-assistant message text corresponding to the cursor line. The byte
-offsets SHALL be derived from the goldmark AST `Lines()` segments of
-the relevant block node.
+When the comment composer is opened from visual mode, the saved
+anchor SHALL be `(BlockIdx, CharStart, CharEnd)` where
+`BlockIdx` is the index of the block containing the selection,
+`CharStart` is `selection.charA` (a byte offset into the block's
+source), and `CharEnd` is `selection.charC` (a byte offset into
+the block's source). The byte offsets are the verbatim anchor
+set by `v` and extended by `h`/`l`/`j`/`k`; no further
+projection through goldmark `Lines()` segments is required
+because the cursor already lives in source-byte space.
 
 #### Scenario: Inline anchor uses byte offsets
 
-- **WHEN** the user opens the comment composer from visual line mode
+- **WHEN** the user opens the comment composer from visual mode
   and saves
-- **THEN** the saved comment has `Kind = BlockParagraph` (or whatever
-  the containing block's kind is), `BlockIdx` matches the containing
-  block, and `CharStart` and `CharEnd` are non-negative byte offsets
-  into the original assistant message text
+- **THEN** the saved comment has `Kind = BlockParagraph` (or
+  whatever the containing block's kind is), `BlockIdx` matches
+  the selection's block, and `CharStart` and `CharEnd` are
+  non-negative byte offsets into the block's source
 
 #### Scenario: Inline anchor preserves source text
 
 - **WHEN** a comment is saved with an inline anchor
-- **THEN** the verbatim slice `originalText[CharStart:CharEnd]` is
-  stored alongside the comment so the original text can be quoted in
-  the redirect appendix
+- **THEN** the verbatim slice `block.Source[CharStart:CharEnd]`
+  is stored alongside the comment so the original text can be
+  quoted in the redirect appendix
 
-### Requirement: Auto-scroll during visual selection
+### Requirement: Auto-scroll during cursor motion
 
-While in visual line mode, when the visual cursor moves to a rendered
-line that is not currently visible in the viewport (above the top or
-below the bottom of the visible range), the viewport SHALL scroll so
-that the cursor line becomes visible.
+In `stateNav`, when the cursor moves such that its rendered line
+is no longer inside the viewport's visible range, the viewport
+SHALL scroll so that the cursor's line sits inside the visible
+range with a 1-line cushion above and below. When the cursor
+moves within the visible range, the viewport SHALL be left
+alone.
 
-#### Scenario: j past bottom scrolls down
+#### Scenario: Motion off-screen scrolls the viewport
 
-- **WHEN** the user is in visual line mode with the cursor at the
-  last visible line of the viewport and presses `j`
-- **THEN** the viewport scrolls down by one rendered line so the
-  new cursor line is visible
+- **WHEN** the cursor moves (via `j`, `k`, `h`, `l`) such that
+  its rendered line is not inside `[YOffset, YOffset + Height)`
+- **THEN** `YOffset` is updated so the cursor's line is visible
+  with the 1-line cushion preserved
 
-#### Scenario: k past top scrolls up
+#### Scenario: Motion within the visible range leaves YOffset alone
 
-- **WHEN** the user is in visual line mode with the cursor at the
-  first visible line of the viewport and presses `k`
-- **THEN** the viewport scrolls up by one rendered line so the new
-  cursor line is visible
+- **WHEN** the cursor moves and its rendered line is already
+  inside `[YOffset, YOffset + Height)`
+- **THEN** `YOffset` is unchanged
 
 ### Requirement: Comment footnote rendering
 
@@ -152,11 +166,11 @@ the comment text. The rendered line range of the commented block
 SHALL also receive a background colour tint to make the commented
 region visually distinct. The commented block SHALL be marked in
 the left-margin gutter column with the character `▍` in yellow
-(foreground colour `228`) on every rendered line that falls inside
-the block's `StartLine..EndLine` range, regardless of whether the
-block is currently focused. No first-line `▸` or `•` glyph SHALL
-be prepended to the block's first rendered line in the document
-body.
+(foreground colour `228`) on every rendered line that falls
+inside the block's `StartLine..EndLine` range, regardless of
+whether the block is currently focused. No first-line `▸` or `•`
+glyph SHALL be prepended to the block's first rendered line in
+the document body.
 
 #### Scenario: Footnote appears below commented block
 
@@ -194,73 +208,20 @@ body.
   `StartLine..EndLine` range receives the comment background
   colour tint
 
-### Requirement: Block-local edit and delete
-
-When the currently-focused block has one or more saved comments, the
-system SHALL expose edit and delete operations scoped to that block.
-Pressing `e` in idle state while focused on a commented block SHALL
-open the comment composer pre-filled with the most recent comment's
-text. Pressing `d` in idle state while focused on a commented block
-SHALL delete the most recent comment. Pressing `n` SHALL jump the
-viewport to the first line of the next commented block (or the first
-commented block if none has been visited yet). Pressing `N` SHALL
-jump to the first line of the previous commented block.
-
-#### Scenario: e edits most recent comment on current block
-
-- **WHEN** the user presses `e` in idle state and the focused block
-  has at least one comment
-- **THEN** the TUI enters comment composer state with the textarea
-  pre-filled with the text of the most recent comment on that block
-
-#### Scenario: d deletes most recent comment on current block
-
-- **WHEN** the user presses `d` in idle state and the focused block
-  has at least one comment
-- **THEN** the most recent comment on that block is removed, the
-  view re-renders without that comment's footnote and highlight, and
-  the TUI remains in idle state
-
-#### Scenario: e on uncommented block is a no-op
-
-- **WHEN** the user presses `e` in idle state and the focused block
-  has no comments
-- **THEN** the TUI remains in idle state and no composer is opened
-
-#### Scenario: d on uncommented block is a no-op
-
-- **WHEN** the user presses `d` in idle state and the focused block
-  has no comments
-- **THEN** the TUI remains in idle state and nothing is deleted
-
-#### Scenario: n jumps to next commented block
-
-- **WHEN** the user presses `n` in idle state and there is a
-  commented block after the focused block
-- **THEN** the viewport scrolls so the first line of the next
-  commented block is at the top of the viewport
-
-#### Scenario: N jumps to previous commented block
-
-- **WHEN** the user presses `N` in idle state and there is a
-  commented block before the focused block
-- **THEN** the viewport scrolls so the first line of the previous
-  commented block is at the top of the viewport
-
 ### Requirement: In-memory storage only
 
 Comments SHALL be stored in memory on the model and SHALL NOT be
 written to disk. When the assistant message content changes (the
 `latest.text` field is replaced by a new assistant message), all
-existing comments SHALL be discarded. When the TUI detaches from the
-session or quits, all comments SHALL be discarded.
+existing comments SHALL be discarded. When the TUI detaches from
+the session or quits, all comments SHALL be discarded.
 
 #### Scenario: New message clears comments
 
 - **WHEN** a new assistant message arrives and replaces the
   currently-displayed message
-- **THEN** all existing comments are discarded and the rendered view
-  shows no comment footnotes or highlights
+- **THEN** all existing comments are discarded and the rendered
+  view shows no comment footnotes or highlights
 
 #### Scenario: Detach clears comments
 
@@ -275,43 +236,45 @@ session or quits, all comments SHALL be discarded.
 
 ### Requirement: Include comments in redirect
 
-While in compose state, pressing `Ctrl+I` SHALL toggle whether the
-queued redirect will be sent with a comments appendix. When the flag
-is enabled and the user sends the redirect (Ctrl+S), the inject
-payload SHALL be the redirect text followed by a separator line
-(`---`) and a numbered list of all current comments in chronological
-order (oldest first). Each entry SHALL include the comment kind
-(`block` or `inline`), a short quote of the source text (block source
-or inline excerpt, truncated to ~40 chars with an ellipsis if longer),
-the block's line range, and the comment text.
+While in compose state, pressing `Ctrl+I` SHALL toggle whether
+the queued redirect will be sent with a comments appendix. When
+the flag is enabled and the user sends the redirect (`s`), the
+inject payload SHALL be the redirect text followed by a separator
+line (`---`) and a numbered list of all current comments in
+chronological order (oldest first). Each entry SHALL include the
+comment kind (`block` or `inline`), a short quote of the source
+text (block source or inline excerpt, truncated to ~40 chars
+with an ellipsis if longer), the block's line range, and the
+comment text.
 
-#### Scenario: Ctrl+I toggles include flag
+#### Scenario: `Ctrl+I` toggles include flag
 
 - **WHEN** the user is in compose state and presses `Ctrl+I`
-- **THEN** the include-comments flag is toggled, and the status line
-  reflects the new state (e.g., `[I] include N comments — ON/OFF`)
+- **THEN** the include-comments flag is toggled, and the status
+  line reflects the new state (e.g., `[I] include N comments —
+  ON/OFF`)
 
-#### Scenario: Send with flag ON appends appendix
+#### Scenario: `s` with flag ON appends appendix
 
-- **WHEN** the user is in compose state, the include flag is ON, and
-  the user presses `Ctrl+S` with non-empty text
+- **WHEN** the user is in compose state, the include flag is ON,
+  and the user presses `s` with non-empty text
 - **THEN** the inject payload sent to the agent's pane is
   `<redirect text>\n\n---\nN comments:\n- <comment 1>\n- <comment 2>\n...`
   where each comment line follows the format
   `block "<excerpt>" (lines X-Y): <text>` or
   `inline "<excerpt>" (line Z): <text>`
 
-#### Scenario: Send with flag OFF sends plain redirect
+#### Scenario: `s` with flag OFF sends plain redirect
 
 - **WHEN** the user is in compose state, the include flag is OFF,
-  and the user presses `Ctrl+S` with non-empty text
-- **THEN** the inject payload is exactly the redirect text with no
-  comments appendix
+  and the user presses `s` with non-empty text
+- **THEN** the inject payload is exactly the redirect text with
+  no comments appendix
 
-#### Scenario: Send with flag ON and zero comments sends plain redirect
+#### Scenario: `s` with flag ON and zero comments sends plain redirect
 
-- **WHEN** the user is in compose state, the include flag is ON, and
-  there are no comments, and the user presses `Ctrl+S`
+- **WHEN** the user is in compose state, the include flag is ON,
+  and there are no comments, and the user presses `s`
 - **THEN** the inject payload is exactly the redirect text (no
   appendix because the count is zero)
 
@@ -320,19 +283,19 @@ the block's line range, and the comment text.
 When the currently-focused block is also a commented block, both
 the cyan focus gutter and the yellow comment gutter SHALL be
 applied to the block's lines. The focus signal (cyan) SHALL take
-precedence over the comment signal (yellow): the gutter character
-for a focused-and-commented block SHALL be `▍` cyan. The
-background tint over the commented line range SHALL still cover
-the block's content lines regardless of focus.
+precedence over the comment signal (yellow): the gutter
+character for a focused-and-commented block SHALL be `▍` cyan.
+The background tint over the commented line range SHALL still
+cover the block's content lines regardless of focus.
 
 > **Note:** The prior version of this requirement described the
 > heavy horizontal border around the focused block. The border
 > has been replaced by the cyan left-gutter focus indicator
-> defined in the `latest-message-view` spec
-> (`### Requirement: Block focus indicator`). This requirement
-> is preserved because the *coexistence* rule still applies
-> (the gutter's cyan state and the comment tint's yellow gutter
-> can both apply to the same block).
+> defined in the `latest-message-view` spec (`### Requirement:
+> Block focus indicator`). This requirement is preserved because
+> the *coexistence* rule still applies (the gutter's cyan state
+> and the comment tint's yellow gutter can both apply to the
+> same block).
 
 #### Scenario: Focused commented block shows cyan gutter over tint
 
@@ -342,83 +305,93 @@ the block's content lines regardless of focus.
   line in the block's range, and the background tint over those
   lines is unchanged
 
-### Requirement: Visual cursor drives the gutter highlight
+### Requirement: Cursor drives the gutter highlight
 
-While in visual line mode, the cyan left-gutter focus indicator
-SHALL track the visual cursor's currently-focused block, not the
-viewport-driven `YOffset`. As the visual cursor moves between
-blocks (via `j`/`k`/`}`/`{`) the cyan gutter SHALL move with it.
-The visual mode handler MUST short-circuit `j`/`k`/`}`/`{`
-before the idle-view line-movement bindings can match them;
-otherwise the visual cursor would never advance and the gutter
-would stay on whatever block `viewport.YOffset` happened to be on.
+The cyan left-gutter focus indicator SHALL track the cursor's
+currently-focused block (`cursor.blockIdx`) — the same field
+that drives the viewport scroll and the selection range. As the
+cursor moves between blocks (via `j`/`k`) the cyan gutter SHALL
+move with it. The nav handler MUST mutate the cursor (and call
+`refreshViewport`) before the gutter can reflect the new block;
+otherwise the highlight would stay on whatever block
+`viewport.YOffset` happened to be on.
 
-#### Scenario: } moves gutter to next block
-- **WHEN** the user presses `}` in visual line mode and there is a
+#### Scenario: `j` moves gutter to next block
+
+- **WHEN** the user presses `j` in `stateNav` and there is a
   next block
-- **THEN** the cyan gutter moves to the next block, regardless of
-  where `viewport.YOffset` sits
+- **THEN** the cyan gutter moves to the next block, regardless
+  of where `viewport.YOffset` sits
 
-#### Scenario: j leaves gutter in place within the same block
-- **WHEN** the user presses `j` in visual line mode and the
-  visual cursor stays within the same block
-- **THEN** the cyan gutter stays on the same block (the cursor
-  moved within it)
+#### Scenario: `k` leaves gutter in place within the same block
 
-#### Scenario: Esc returns gutter to viewport-driven block
-- **WHEN** the user presses `Esc` in visual line mode
-- **THEN** the cyan gutter returns to the block containing
-  `viewport.YOffset` (the normal idle-view behavior)
+- **WHEN** the user presses `k` in `stateNav` and the cursor
+  stays within the same block (impossible at the block
+  boundary, but the rule covers the case)
+- **THEN** the cyan gutter stays on the same block
+
+#### Scenario: `Esc` returns gutter to cursor-driven block
+
+- **WHEN** the user presses `Esc` in visual mode
+- **THEN** the visual flag clears and the cyan gutter continues
+  to follow the cursor's `blockIdx` (which is unchanged by Esc)
 
 ### Requirement: Visual mode indicator chip
 
 While visual line mode is active the status line SHALL display a
 distinct "VISUAL" chip in addition to the normal status content,
-so the user has unambiguous feedback that `V` was registered. The
-chip SHALL use a high-contrast style (foreground `232`, background
-`51` — cyan — bold) so it stands out from the dim status
-background and is consistent with the cyan selection colour used
-by the document gutter.
+so the user has unambiguous feedback that `v` was registered. The
+chip SHALL use a high-contrast style (foreground `232`,
+background `51` — cyan — bold) so it stands out from the dim
+status background and is consistent with the cyan selection
+colour used by the document gutter.
 
-#### Scenario: V toggles indicator on
-- **WHEN** the user presses `V` in idle state
+#### Scenario: `v` toggles indicator on
+
+- **WHEN** the user presses `v` in `stateNav`
 - **THEN** the status line shows the "VISUAL" indicator (cyan
   background, dark foreground, bold) while visual mode is active
 
-#### Scenario: Esc clears indicator
-- **WHEN** the user presses `Esc` in visual line mode
+#### Scenario: `Esc` clears indicator
+
+- **WHEN** the user presses `Esc` in visual mode
 - **THEN** the status line returns to its non-visual content (no
   "VISUAL" chip)
 
 #### Scenario: Indicator does not appear outside visual mode
-- **WHEN** the TUI is in any non-visual state (idle, compose,
+
+- **WHEN** the TUI is in any non-visual state (nav, compose,
   picker, error)
 - **THEN** the status line SHALL NOT show the "VISUAL" chip
 
-### Requirement: One-shot submit all comments
+### Requirement: One-shot submit all comments via `s`
 
-Pressing `s` in idle state SHALL submit every accumulated comment
-as a single redirect through the existing inject pipeline, without
-requiring the user to enter compose mode or type any text. The
-redirect payload SHALL be exactly the comments appendix (no leading
-user text). On successful send the comment slice SHALL be cleared;
-on inject failure the comments SHALL be kept so the user can retry
-and the error SHALL be surfaced via the same `[send failed: ...]`
-placeholder the compose path uses.
+Pressing `s` in `stateNav` SHALL submit every accumulated
+comment as a single redirect through the existing inject
+pipeline, without requiring the user to enter compose mode or
+type any text. The redirect payload SHALL be exactly the
+comments appendix (no leading user text). On successful send the
+comment slice SHALL be cleared; on inject failure the comments
+SHALL be kept so the user can retry and the error SHALL be
+surfaced via the same `[send failed: ...]` placeholder the
+compose path uses.
 
-#### Scenario: s submits all accumulated comments
-- **WHEN** the user presses `s` in idle state and there is at
+#### Scenario: `s` submits all accumulated comments
+
+- **WHEN** the user presses `s` in `stateNav` and there is at
   least one comment
 - **THEN** the inject pipeline receives a payload equal to
   `render.FormatCommentsAppendix(comments, blocks)`, the comment
   slice is cleared, and no compose-mode interaction is required
 
-#### Scenario: s with no comments is a no-op
-- **WHEN** the user presses `s` in idle state and the comment
+#### Scenario: `s` with no comments is a no-op
+
+- **WHEN** the user presses `s` in `stateNav` and the comment
   slice is empty
 - **THEN** no inject call is made and no state changes
 
 #### Scenario: send failure keeps comments
+
 - **WHEN** the user presses `s` and the inject call returns an
   error
 - **THEN** the comment slice is NOT cleared and the error is

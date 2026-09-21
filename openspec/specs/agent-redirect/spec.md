@@ -57,27 +57,27 @@ The system SHALL continuously tail the agent's session JSONL file and surface ne
 - **WHEN** codex writes a `response_item` with `payload.role: assistant` and `content: [{type: output_text, text: ...}]`
 - **THEN** the `output_text` content is surfaced
 
-#### Scenario: Manual refresh via Ctrl+R
-- **WHEN** the user presses `Ctrl+R` in idle state
+#### Scenario: Manual refresh via `r`
+- **WHEN** the user presses `r` in `stateNav`
 - **THEN** the session source is re-polled from its current offset and the latest-message view is refreshed with any newly surfaced content
 
 ### Requirement: Compose multi-line redirect
-The system SHALL provide a multi-line text input area where the user composes a redirect message. `Enter` inserts a newline; `Ctrl+S` sends.
+The system SHALL provide a multi-line text input area where the user composes a redirect message. `Enter` inserts a newline; `s` sends.
 
 #### Scenario: Enter inserts newline
 - **WHEN** the user presses `Enter` in compose mode
 - **THEN** a newline is inserted at the cursor position and the message is NOT sent
 
-#### Scenario: Send via Ctrl+S
-- **WHEN** the user presses `Ctrl+S` in compose mode with non-empty input
+#### Scenario: Send via `s`
+- **WHEN** the user presses `s` in compose mode with non-empty input
 - **THEN** the composed text is sent to the target pane via tmux paste-buffer + send-keys
 
 #### Scenario: Cancel via Esc
 - **WHEN** the user presses `Esc` in compose mode
-- **THEN** the compose buffer is discarded and the TUI returns to idle
+- **THEN** the compose buffer is discarded and the TUI returns to nav
 
 #### Scenario: Empty input cannot be sent
-- **WHEN** the compose buffer is empty and the user presses `Ctrl+S`
+- **WHEN** the compose buffer is empty and the user presses `s`
 - **THEN** the system SHALL NOT send (no-op)
 
 ### Requirement: Inject composed redirect into target pane
@@ -108,4 +108,3 @@ The system SHALL require a running tmux server and a target pane at startup. tmu
 #### Scenario: Target pane missing
 - **WHEN** the resolved target pane ID does not exist
 - **THEN** pinky exits with a message naming the missing pane
-

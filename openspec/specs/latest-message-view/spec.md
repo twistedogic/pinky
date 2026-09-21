@@ -57,22 +57,26 @@ width the prior 2-cell-margin + border layout used.
 
 The TUI SHALL indicate the currently-focused block by drawing a
 left-margin gutter character `▍` in cyan (foreground colour `51`)
-on every rendered line that falls inside that block's
+on every rendered line that falls inside the focused block's
 `StartLine..EndLine` range. Lines outside any focused block SHALL
 have a single space in that left-margin column. No horizontal
 border lines (above or below the block) and no left vertical bar
 across the block's content SHALL be drawn.
 
+The focused block is the block at the cursor's `blockIdx` (see
+the `single-cursor-nav` capability). The cursor is the single
+source of truth — visual mode and idle mode both read the same
+cursor.
+
 #### Scenario: Focused block carries cyan gutter
-- **WHEN** the user navigates so block N becomes the focused
-  block
+- **WHEN** the cursor's `blockIdx` is `N`
 - **THEN** every rendered line at indices `blocks[N].StartLine`
   through `blocks[N].EndLine` has a cyan `▍` in its leftmost
   column
 
 #### Scenario: Non-focused lines have an empty gutter column
-- **WHEN** the user is focused on block N and the viewport also
-  shows lines that belong to block N-1 or block N+1
+- **WHEN** the cursor is on block N and the viewport also shows
+  lines that belong to block N-1 or block N+1
 - **THEN** the lines belonging to N-1 and N+1 have a space in
   their leftmost column
 
@@ -82,10 +86,10 @@ across the block's content SHALL be drawn.
 - **THEN** that gap line has a space in its leftmost column
 
 #### Scenario: Visual mode routes the gutter to the cursor's block
-- **WHEN** the user is in visual line mode and the visual cursor
-  is in block M while `viewport.YOffset` is in block N (M ≠ N)
-- **THEN** the cyan `▍` follows block M (the visual cursor's
-  block), not block N
+- **WHEN** the user is in visual line mode and the cursor is in
+  block M (cursor is the source of truth in both modes)
+- **THEN** the cyan `▍` follows block M, regardless of the
+  viewport's `YOffset`
 
 ### Requirement: Heading weight without markdown markers
 
@@ -129,67 +133,59 @@ The system SHALL parse the assistant message text into a markdown AST and build 
 - **WHEN** the assistant message contains an empty paragraph between two blocks
 - **THEN** the empty paragraph is not in the block index
 
-### Requirement: Vim-style navigation
-The system SHALL provide vim-style navigation keys in the idle state. `j` SHALL move down one line, `k` SHALL move up one line, `}` SHALL jump to the first line of the next block, `{` SHALL jump to the first line of the previous block, `]]` SHALL jump to the first line of the next heading, `[[` SHALL jump to the first line of the previous heading, `gg` SHALL jump to the top of the message, and `G` SHALL jump to the bottom of the message. The two-key sequences `gg`, `]]`, and `[[` SHALL be detected via a state field with a 500ms timeout.
+### Requirement: Single-letter nav surface in stateNav
 
-#### Scenario: j moves down one line
-- **WHEN** the user presses `j` in idle state
-- **THEN** the viewport scrolls down by one line
+In `stateNav` (formerly `stateIdle`) the system SHALL provide a
+single-letter nav surface. The bindings and actions are:
 
-#### Scenario: k moves up one line
-- **WHEN** the user presses `k` in idle state
-- **THEN** the viewport scrolls up by one line
+| key  | action |
+|------|--------|
+| `j`  | move cursor to next block |
+| `k`  | move cursor to previous block |
+| `h`  | move cursor one rune left within the current block |
+| `l`  | move cursor one rune right within the current block |
+| `v`  | enter visual mode (toggle); re-press while visual exits |
+| `Esc`| exit visual mode (no-op when not in visual) |
+| `c`  | open comment composer (selection-anchored if visual, block-anchored otherwise) |
+| `s`  | send to agent (idle batch when comments exist; compose otherwise) |
+| `n`  | enter compose mode |
+| `r`  | refresh the tailed session and re-render the latest message |
+| `q`  | quit pinky |
+| `?`  | toggle short / full help overlay |
 
-#### Scenario: } jumps to next block
-- **WHEN** the user presses `}` in idle state and the current block is not the last
-- **THEN** the viewport scrolls so the first line of the next block is at the top of the viewport
+The previous two-key state machine (`gg`, `]]`, `[[`) and the
+`Ctrl+C` / `Ctrl+N` / `Ctrl+R` / `Ctrl+S` / `Ctrl+I` bindings
+SHALL NOT exist in `stateNav`.
 
-#### Scenario: { jumps to previous block
-- **WHEN** the user presses `{` in idle state and the current block is not the first
-- **THEN** the viewport scrolls so the first line of the previous block is at the top of the viewport
+#### Scenario: `j` moves to the next block
+- **WHEN** the user presses `j` in `stateNav`
+- **THEN** the cursor's `blockIdx` increments by one (clamped at
+  the last block) and the viewport scrolls to keep the cursor
+  visible
 
-#### Scenario: ]] jumps to next heading
-- **WHEN** the user presses `]]` in idle state and there is a heading after the current one
-- **THEN** the viewport scrolls so the first line of the next heading block is at the top of the viewport
+#### Scenario: `k` moves to the previous block
+- **WHEN** the user presses `k` in `stateNav`
+- **THEN** the cursor's `blockIdx` decrements by one (clamped at
+  the first block) and the viewport scrolls to keep the cursor
+  visible
 
-#### Scenario: [[ jumps to previous heading
-- **WHEN** the user presses `[[` in idle state and there is a heading before the current one
-- **THEN** the viewport scrolls so the first line of the previous heading block is at the top of the viewport
+#### Scenario: `h` moves one rune left
+- **WHEN** the user presses `h` in `stateNav` and the cursor's
+  `charPos` is greater than `0`
+- **THEN** the cursor's `charPos` decreases by the byte length of
+  the rune preceding it
 
-#### Scenario: gg jumps to top
-- **WHEN** the user presses `g` then `g` within 500ms in idle state
-- **THEN** the viewport scrolls to the top of the message
+#### Scenario: `l` moves one rune right
+- **WHEN** the user presses `l` in `stateNav` and the cursor's
+  `charPos` is less than `len(block.Source)`
+- **THEN** the cursor's `charPos` increases by the byte length of
+  the rune at the current offset
 
-#### Scenario: G jumps to bottom
-- **WHEN** the user presses `G` in idle state
-- **THEN** the viewport scrolls to the bottom of the message
-
-#### Scenario: Two-key timeout clears state
-- **WHEN** the user presses `g` and more than 500ms elapse before another key
-- **THEN** the two-key state is cleared
-
-#### Scenario: Non-matching second key clears state
-- **WHEN** the user presses `g` followed by any key other than `g` within 500ms
-- **THEN** the two-key state is cleared and the second key is processed normally
-
-### Requirement: Arrow and page keys alias vim keys
-The system SHALL keep arrow keys and `PgUp`/`PgDn` working as aliases for the vim-style keys so existing muscle memory does not break. `↑` SHALL behave as `k`, `↓` SHALL behave as `j`, `PgUp` SHALL jump to the top of the current message, and `PgDn` SHALL behave as `}` (jump to next block).
-
-#### Scenario: Arrow down moves one line
-- **WHEN** the user presses `↓` in idle state
-- **THEN** the viewport scrolls down by one line
-
-#### Scenario: Arrow up moves one line
-- **WHEN** the user presses `↑` in idle state
-- **THEN** the viewport scrolls up by one line
-
-#### Scenario: PgUp jumps to top of message
-- **WHEN** the user presses `PgUp` in idle state
-- **THEN** the viewport scrolls to the top of the current message
-
-#### Scenario: PgDn jumps to next block
-- **WHEN** the user presses `PgDn` in idle state
-- **THEN** the viewport scrolls to the first line of the next block
+#### Scenario: Two-key sequences do not exist
+- **WHEN** the user presses `g` followed by `g` in `stateNav`
+- **THEN** the first `g` is processed as an unknown rune (no
+  state, no timeout); the second `g` is processed as an unknown
+  rune. No `gg` action fires.
 
 ### Requirement: Yank to bottom on new content
 The system SHALL scroll the viewport to the bottom of the message each time new content is appended to the current message, so the user sees the latest text without manual scrolling.
@@ -231,18 +227,17 @@ index from "Build markdown block index" as the line-range source.
 
 ### Requirement: Always-visible help footer
 The latest-message view SHALL render a one-line keymap footer at
-the bottom of every state's view (`s` picker / idle / compose /
+the bottom of every state's view (`s` picker / nav / compose /
 comment-composer / error). Pressing `?` SHALL expand the footer
 into a multi-column full-help view; pressing `?` again SHALL
 collapse it back. The footer SHALL be sourced from the bubbles
 `help.Model` package and SHALL satisfy the `help.KeyMap` interface
 with state-aware `ShortHelp()` and `FullHelp()` methods. The
-viewport SHALL be shortened by the footer's height (1 line for
-short, N lines for the largest full-help group) so the footer
+viewport SHALL be shortened by the footer's height so the footer
 never overlaps the message content.
 
-#### Scenario: Idle view shows short help
-- **WHEN** the TUI is in idle state
+#### Scenario: Nav view shows short help
+- **WHEN** the TUI is in nav state
 - **THEN** the bottom of the view contains a one-line keymap
   footer listing the most relevant keys for the current state
 
@@ -256,8 +251,7 @@ never overlaps the message content.
 #### Scenario: Help footer reserves viewport space
 - **WHEN** the footer is shown
 - **THEN** the message viewport is shortened by the footer's
-  height (1 line for short, N lines for the largest full-help
-  group) so the footer never overlaps the message content
+  height so the footer never overlaps the message content
 
 #### Scenario: Compose and error states also show help
 - **WHEN** the TUI is in compose / comment-composer / error /

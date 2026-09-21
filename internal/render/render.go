@@ -80,8 +80,8 @@ func renderBlocks(md string, width int) (string, []Block) {
 	}
 	root := goldmark.New(
 		goldmark.WithExtensions(
-			extension.GFM,           // GitHub-flavored markdown (tables, strikethrough, task lists, autolinks)
-			extension.Linkify,       // auto-detect URLs in text and turn them into links
+			extension.GFM,     // GitHub-flavored markdown (tables, strikethrough, task lists, autolinks)
+			extension.Linkify, // auto-detect URLs in text and turn them into links
 			extension.DefinitionList,
 		),
 	).Parser().Parse(text.NewReader([]byte(md)))
@@ -291,11 +291,3 @@ func (c Comment) Marker() string {
 	}
 	return "•"
 }
-
-// SelectionMode tracks the visual selection mode for the idle view.
-type SelectionMode int
-
-const (
-	SelNone SelectionMode = iota
-	SelLine
-)

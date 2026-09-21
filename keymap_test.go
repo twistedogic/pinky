@@ -8,27 +8,28 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// TestIdleKey_Q_Quits: pressing `q` in idle state quits the program.
-func TestIdleKey_Q_Quits(t *testing.T) {
+// TestNavKey_Q_Quits: pressing `q` in nav state quits the program.
+func TestNavKey_Q_Quits(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd == nil {
-		t.Error("expected tea.Quit when q is pressed in idle state")
+		t.Error("expected tea.Quit when q is pressed in nav state")
 	}
-	if updated.(model).state != stateIdle {
-		t.Errorf("state = %d want stateIdle", updated.(model).state)
+	if updated.(model).state != stateNav {
+		t.Errorf("state = %d want stateNav", updated.(model).state)
 	}
 }
 
-// TestIdleKey_C_EntersCompose: pressing `c` in idle state transitions
-// to compose mode (vim-style alias for Ctrl+N).
-func TestIdleKey_C_EntersCompose(t *testing.T) {
+// TestNavKey_N_EntersCompose: pressing `n` in nav state transitions
+// to compose mode. (Old design used `c` here; per change, `c` is
+// block-level comment composer.)
+func TestNavKey_N_EntersCompose(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	if cmd != nil {
 		t.Errorf("did not expect a cmd on entering compose; got %v", cmd)
 	}
@@ -77,7 +78,7 @@ func TestComposeKey_C_TypesC(t *testing.T) {
 // always visible; the toggle just switches its verbosity.
 func TestHelpKey_TogglesShowAll(t *testing.T) {
 	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
+	m.state = stateNav
 	m.refreshViewport()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
@@ -91,18 +92,23 @@ func TestHelpKey_TogglesShowAll(t *testing.T) {
 }
 
 // newIdleModelForKeymap builds a minimal model ready for key tests.
-// Initializes a textarea so the cursor/blink machinery is wired up.
+// Initializes a textarea so the cursor/blink machinery is wired up
+// and the comment composer so tests that open it don't nil-deref.
 func newIdleModelForKeymap(t *testing.T) model {
 	t.Helper()
 	ta := textarea.New()
 	ta.SetHeight(composeHeight)
 	ta.SetWidth(80)
 	ta.Focus()
+	cta := textarea.New()
+	cta.SetHeight(composeHeight)
+	cta.SetWidth(80)
 	return model{
-		state:    stateIdle,
-		viewport: viewport.New(80, 20),
-		textarea: ta,
-		width:    80,
-		height:   24,
+		state:     stateNav,
+		viewport:  viewport.New(80, 20),
+		textarea:  ta,
+		commentTa: cta,
+		width:     80,
+		height:    24,
 	}
 }

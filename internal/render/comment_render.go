@@ -1,9 +1,9 @@
 package render
 
 import (
-	"strings"
 	"cmp"
 	"slices"
+	"strings"
 )
 
 // footnote is one comment's footnote line, ready to be injected
@@ -58,7 +58,6 @@ func VisibleWidth(s string) int {
 	}
 	return n
 }
-
 
 // RenderMessageWithComments renders md and overlays comment annotations
 // on top of the result: a footnote line below each commented block,

@@ -93,7 +93,8 @@ second block`
 // Helpers for navigation tests below.
 func mustBuild(t *testing.T, md string, width int) []Block {
 	t.Helper()
-	_, b := RenderMessage(md, width); return b
+	_, b := RenderMessage(md, width)
+	return b
 }
 
 func lines(n int) []string {

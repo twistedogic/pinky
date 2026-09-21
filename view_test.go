@@ -16,7 +16,7 @@ func TestView_PadsPickerToFullWidth(t *testing.T) {
 	m.agents = []session.AgentSession{
 		{Session: "work", Window: "1", Pane: "1", PaneID: "%12", Agent: "codex"},
 	}
-	m.cursor = 0
+	m.pickCursor = 0
 	m.width = 80
 	m.height = 24
 
@@ -30,7 +30,7 @@ func TestView_PadsPickerToFullWidth(t *testing.T) {
 
 func TestView_PadsStatusLineToFullWidth(t *testing.T) {
 	m := newModel()
-	m.state = stateIdle
+	m.state = stateNav
 	m.pane = "%12"
 	m.width = 80
 	m.height = 24

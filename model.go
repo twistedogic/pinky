@@ -24,14 +24,13 @@ const (
 	statusHeight  = 1
 
 	placeholderText = "waiting for agent…"
-
 )
 
 type state int
 
 const (
 	statePicking state = iota
-	stateIdle
+	stateNav
 	stateCompose
 	stateCommentComposer
 	stateError
@@ -41,10 +40,6 @@ type sessionMsg struct {
 	entries []session.Message
 	err     error
 }
-
-// visualState is a thin alias to render.VisualState so the model
-// owns a live visual selection cursor with all its methods.
-type visualState = render.VisualState
 
 // commentAnchor captures the target for a comment being composed.
 // editing is true when re-opening the composer for an existing comment
@@ -61,8 +56,8 @@ type model struct {
 	state state
 
 	// Picking state
-	agents []session.AgentSession
-	cursor int
+	agents     []session.AgentSession
+	pickCursor int
 
 	// Attached state
 	pane string
@@ -85,9 +80,14 @@ type model struct {
 	// when msgHash flips or attach() runs.
 	comments []render.Comment
 
-	// visual tracks the inline visual selection cursor; mode==selNone
-	// when not in visual mode.
-	visual visualState
+	// cursor is the single nav pointer. BlockIdx into m.blocks;
+	// CharPos is a byte offset into blocks[BlockIdx].Source.
+	cursor render.NavCursor
+	// selection tracks the inline visual selection range. Valid only
+	// when nav.Visual == render.NavLine.
+	selection render.NavSelection
+	// nav is the nav state machine state.
+	nav render.NavState
 
 	// msgHash is a short fingerprint of latest.Text; flips when the
 	// assistant message content changes, which triggers a comment reset.
@@ -106,8 +106,6 @@ type model struct {
 	// comment. CharStart/End are derived when saving (CharStart ==
 	// CharEnd == -1 means block-level).
 	commentAnchor commentAnchor
-
-	vim render.VimState
 
 	// Error state: set when initialization or attach fails. The TUI
 	// shows the message and exits on any key press.
@@ -133,67 +131,32 @@ func commentHash(text string) string {
 	return fmt.Sprintf("%08x", h.Sum32())
 }
 
-// mostRecentComment returns the index (into m.comments) of the most
-// recent comment for the given block, or (-1, false) if none.
-func (m *model) mostRecentComment(blockIdx int) (int, bool) {
-	for i := len(m.comments) - 1; i >= 0; i-- {
-		if m.comments[i].BlockIdx == blockIdx {
-			return i, true
-		}
-	}
-	return -1, false
-}
-
-// nextCommentedBlock returns the index of the next commented block
-// in the direction of delta, wrapping around at the ends. Returns
-// -1 if no block has comments.
-func (m *model) nextCommentedBlock(delta int) int {
-	if len(m.blocks) == 0 {
-		return -1
-	}
-	cur := render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-	if cur < 0 {
-		cur = 0
-	}
-	has := map[int]bool{}
-	for _, c := range m.comments {
-		has[c.BlockIdx] = true
-	}
-	if len(has) == 0 {
-		return -1
-	}
-	for step := 1; step <= len(m.blocks); step++ {
-		next := cur + delta*step
-		// wrap
-		for next < 0 {
-			next += len(m.blocks)
-		}
-		for next >= len(m.blocks) {
-			next -= len(m.blocks)
-		}
-		if has[next] {
-			return next
-		}
-	}
-	return -1
-}
-
-// cursorOnScreen returns true when visual.cursor is within the viewport's
-// visible rendered-line range.
+// cursorOnScreen returns true when the cursor's rendered line is
+// within the viewport's visible range.
 func (m *model) cursorOnScreen() bool {
+	if len(m.blocks) == 0 {
+		return true
+	}
+	line := render.NavLineIndex(m.blocks, m.cursor)
 	top := m.viewport.YOffset
 	bot := top + m.viewport.Height
-	return m.visual.Cursor >= top && m.visual.Cursor <= bot
+	return line >= top && line <= bot
 }
 
-// scrollCursorIntoView adjusts the viewport's YOffset so the visual
-// cursor sits one line inside the visible range. Called from
-// handleIdleKey after j/k/}/{ in visual mode.
+// scrollCursorIntoView adjusts the viewport's YOffset so the cursor
+// sits one line inside the visible range. Called from handleNavKey
+// after every motion. Per design D9 the viewport follows the cursor
+// with a 1-line cushion (not vim's scrolloff=5; pinky's viewport is
+// ~16 rows tall and a 5-line cushion would feel jumpy).
 func (m *model) scrollCursorIntoView() {
+	if len(m.blocks) == 0 {
+		return
+	}
 	if m.cursorOnScreen() {
 		return
 	}
-	off := max(m.visual.Cursor-m.viewport.Height+1, 0)
+	target := render.NavLineIndex(m.blocks, m.cursor)
+	off := max(target-m.viewport.Height+1, 0)
 	m.viewport.SetYOffset(off)
 }
 
@@ -208,7 +171,7 @@ func newModel() model {
 
 func (m *model) setAgents(agents []session.AgentSession) {
 	m.agents = agents
-	m.cursor = 0
+	m.pickCursor = 0
 }
 
 // viewportSize returns (w, h) for the viewport at idle state. If the
@@ -245,7 +208,7 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	m.hist = hist
 	m.viewport = viewport.New(w, h)
 	m.textarea = ta
-	m.state = stateIdle
+	m.state = stateNav
 	m.refreshViewport()
 	m.initCommentComposer()
 	m.comments = nil
@@ -291,7 +254,7 @@ func (m *model) selectAgent(idx int) error {
 }
 
 func (m model) Init() tea.Cmd {
-	if m.state == stateIdle {
+	if m.state == stateNav {
 		return pollCmd(m.src)
 	}
 	return nil
@@ -368,7 +331,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var taCmd tea.Cmd
 		m.textarea, taCmd = m.textarea.Update(msg)
 		cmds = append(cmds, taCmd)
-	case stateIdle:
+	case stateNav:
 		var vpCmd tea.Cmd
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		cmds = append(cmds, vpCmd)
@@ -392,8 +355,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case statePicking:
 		return m.handlePickerKey(msg)
-	case stateIdle:
-		return m.handleIdleKey(msg)
+	case stateNav:
+		return m.handleNavKey(msg)
 	case stateCompose:
 		return m.handleComposeKey(msg)
 	case stateCommentComposer:
@@ -445,7 +408,7 @@ func (m *model) submitAllComments() {
 }
 func (m *model) enterCompose() {
 	m.state = stateCompose
-	m.vim = render.VimState{}
+	m.nav = render.NavState{}
 	m.textarea.Focus()
 	m.textarea.Reset()
 	m.reflow()
@@ -472,8 +435,7 @@ func (m *model) enterCommentComposer(a commentAnchor) {
 		m.commentTa.SetValue(m.comments[a.editingIdx].Text)
 	}
 	m.commentTa.Focus()
-	m.vim = render.VimState{}
-	m.visual.Mode = render.SelNone
+	m.nav = render.NavState{}
 	m.state = stateCommentComposer
 	m.reflow()
 }
@@ -497,7 +459,7 @@ func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // cancelCommentComposer returns to idle without saving.
 func (m *model) cancelCommentComposer() {
 	m.commentTa.Blur()
-	m.state = stateIdle
+	m.state = stateNav
 	m.reflow()
 }
 
@@ -551,7 +513,7 @@ func (m *model) saveComment() {
 		m.comments = append(m.comments, c)
 	}
 	m.commentTa.Blur()
-	m.state = stateIdle
+	m.state = stateNav
 	m.reflow()
 	m.refreshViewport()
 }
@@ -563,7 +525,7 @@ func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, defaultKeyMap.Down):
 		m.moveCursor(+1)
 	case key.Matches(msg, defaultKeyMap.Pick):
-		if err := m.selectAgent(m.cursor); err != nil {
+		if err := m.selectAgent(m.pickCursor); err != nil {
 			m.state = stateError
 			m.err = err
 			return m, nil
@@ -582,162 +544,92 @@ func (m *model) moveCursor(delta int) {
 	if n == 0 {
 		return
 	}
-	m.cursor = (m.cursor + delta + n) % n
+	m.pickCursor = (m.pickCursor + delta + n) % n
 }
 
-func (m model) handleIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Visual mode must claim keys before the idle-view bindings
-	// below, otherwise j/k/}/{ get eaten as viewport line moves /
-	// block jumps and the visual cursor never moves. Pressing Esc
-	// (or any other unused rune) inside handleVisualKey falls through
-	// to its switch arm that exits visual mode.
-	if m.visual.Mode == render.SelLine {
-		return m.handleVisualKey(msg)
-	}
-
-	switch {
-	case key.Matches(msg, defaultKeyMap.Compose):
-		m.enterCompose()
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.Refresh):
-		return m, pollCmd(m.src)
-	case key.Matches(msg, defaultKeyMap.LineUp):
-		m.viewport.LineUp(1)
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.LineDown):
-		m.viewport.LineDown(1)
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.PrevBlock):
-		m.applyAction(render.VimPrevBlock)
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.NextBlock):
-		m.applyAction(render.VimNextBlock)
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.BottomLine):
-		m.applyAction(render.VimGotoBottom)
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.QuitIdle):
-		return m, tea.Quit
-	}
-
-	switch {
-	case key.Matches(msg, defaultKeyMap.Mark):
-		// m → comment composer for the current block (block-level).
-		idx := render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-		if idx < 0 {
-			return m, nil
-		}
-		m.enterCommentComposer(commentAnchor{blockIdx: idx})
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.Visual):
-		// V → enter visual line mode.
-		idx := render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-		startLine := 0
-		if idx >= 0 {
-			startLine = m.blocks[idx].StartLine
-		}
-		m.visual.Enter(startLine, idx, m.blocks)
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.EditComment):
-		idx := render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-		if i, ok := m.mostRecentComment(idx); ok {
-			c := m.comments[i]
-			m.enterCommentComposer(commentAnchor{
-				blockIdx:   c.BlockIdx,
-				charA:      c.CharStart,
-				charC:      c.CharEnd,
-				editing:    true,
-				editingIdx: i,
-			})
-		}
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.DeleteComment):
-		idx := render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-		if i, ok := m.mostRecentComment(idx); ok {
-			m.comments = append(m.comments[:i], m.comments[i+1:]...)
+func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Esc is a special key but is part of the nav surface (visual
+	// exit). Route it through the SM so single source of truth.
+	if msg.Type == tea.KeyEsc {
+		action := render.NavHandle(0x1b, &m.nav, &m.cursor, &m.selection, m.blocks)
+		if action == render.ActionExitVisual {
 			m.refreshViewport()
 		}
 		return m, nil
-	case key.Matches(msg, defaultKeyMap.NextComment):
-		if next := m.nextCommentedBlock(+1); next >= 0 {
-			m.viewport.SetYOffset(m.blocks[next].StartLine)
-			m.refreshViewport()
-		}
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.PrevComment):
-		if prev := m.nextCommentedBlock(-1); prev >= 0 {
-			m.viewport.SetYOffset(m.blocks[prev].StartLine)
-			m.refreshViewport()
-		}
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.SubmitComments):
-		// One-shot submit: send every accumulated comment as a
-		// single redirect, bypassing the compose textarea flow.
-		m.submitAllComments()
-		return m, nil
 	}
-
-	// Vim two-key sequences (gg, ]], [[): match by the first key and
-	// let the state machine complete the pair.
+	// Single-rune keys go through the nav state machine. Special
+	// keys (arrows, PageUp/Down, Home/End) forward to the viewport.
 	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		action := m.vim.Handle(msg.Runes[0], time.Now())
-		m.applyAction(action)
+		action := render.NavHandle(msg.Runes[0], &m.nav, &m.cursor, &m.selection, m.blocks)
+		switch action {
+		case render.ActionNone:
+			// unrecognised rune — forward to viewport (so keys like '/'
+			// for find, etc., could still work in future).
+		case render.ActionBlockDown, render.ActionBlockUp,
+			render.ActionRuneLeft, render.ActionRuneRight:
+			m.scrollCursorIntoView()
+			m.refreshViewport()
+		case render.ActionEnterVisual:
+			m.refreshViewport()
+		case render.ActionExitVisual:
+			m.refreshViewport()
+		case render.ActionComment:
+			a := m.buildCommentAnchor()
+			m.enterCommentComposer(a)
+		case render.ActionSend:
+			m.handleSend()
+		case render.ActionRefresh:
+			return m, pollCmd(m.src)
+		case render.ActionQuit:
+			return m, tea.Quit
+		case render.ActionCompose:
+			m.enterCompose()
+		case render.ActionHelp:
+			// handled by handleKey before we get here
+		}
 		return m, nil
 	}
-
-	// Forward unhandled to viewport.
+	// Forward unhandled special keys to viewport (arrows, pgup/dn, etc.)
 	var vpCmd tea.Cmd
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	return m, vpCmd
 }
 
-// handleVisualKey processes a key while in visual mode. Movement keys
-// (j/k/}/{) are routed to the visual state machine; c opens the
-// composer; Esc exits. Updates the viewport so the cursor stays
-// visible when it scrolls off-screen.
-func (m model) handleVisualKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Only single-rune keys are meaningful in visual mode.
-	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 {
-		if msg.Type == tea.KeyEsc {
-			m.visual.Mode = render.SelNone
-			return m, nil
+// buildCommentAnchor assembles the (block, charA, charC) for the next
+// comment. With an active selection, anchor is the selection range;
+// otherwise anchor covers the whole block at the cursor.
+func (m *model) buildCommentAnchor() commentAnchor {
+	if m.nav.Visual == render.NavLine {
+		idx := m.selection.BlockIdx
+		if idx < 0 || idx >= len(m.blocks) {
+			idx = m.cursor.BlockIdx
 		}
-		return m, nil
+		a, c := m.selection.CharA, m.selection.CharC
+		if a > c {
+			a, c = c, a
+		}
+		return commentAnchor{blockIdx: idx, charA: a, charC: c}
 	}
-	totalLines := strings.Count(m.viewport.View(), "\n")
-	action := m.visual.Handle(msg.Runes[0], totalLines, m.blocks)
-	switch action {
-	case render.VisualEnter:
-		// Should not happen (we're already in visual mode).
-	case render.VisualLineDown, render.VisualLineUp, render.VisualNextBlock, render.VisualPrevBlock:
-		m.scrollCursorIntoView()
-		// Borders are baked into the viewport content at refresh
-		// time, so moving the visual cursor to a different block
-		// requires re-rendering — otherwise the highlight would
-		// stay on whatever block viewport.YOffset happened to be on.
-		m.refreshViewport()
-	case render.VisualComposer:
-		idx := m.visual.CurBlock
-		a := commentAnchor{blockIdx: idx, charA: m.visual.CharA, charC: m.visual.CharC}
-		m.enterCommentComposer(a)
-	case render.VisualExit:
-		m.visual.Mode = render.SelNone
-		// Same reason as above: the highlight must return to the
-		// viewport-driven block on exit, not stay on the visual one.
-		m.refreshViewport()
+	idx := m.cursor.BlockIdx
+	if idx < 0 || idx >= len(m.blocks) {
+		return commentAnchor{blockIdx: -1, charA: -1, charC: -1}
 	}
-	return m, nil
+	src := m.blocks[idx].Source
+	return commentAnchor{blockIdx: idx, charA: 0, charC: len(src)}
 }
 
-func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, defaultKeyMap.IncludeComments):
-		m.includeComments = !m.includeComments
-		return m, nil
-	case key.Matches(msg, defaultKeyMap.Send):
+// handleSend is the universal `s` dispatch. In nav it batch-sends
+// the accumulated comments (no-op if empty). In compose it sends the
+// textarea content with the optional comments appendix. Called from
+// handleNavKey and (via the same ActionSend) from handleComposeKey.
+func (m *model) handleSend() {
+	switch m.state {
+	case stateNav:
+		m.submitAllComments()
+	case stateCompose:
 		text := m.textarea.Value()
 		if text == "" {
-			return m, nil
+			return
 		}
 		if m.includeComments && len(m.comments) > 0 {
 			text += render.FormatCommentsAppendix(m.comments, m.blocks)
@@ -746,59 +638,41 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			_ = m.hist.Append(string(session.RoleUser), text)
 		}
 		if err := sendToPane(m.pane, text); err != nil {
-			// ponytail: surface a transient placeholder rather than
-			// permanently mutating view state; revisit if it bites.
 			m.latest = session.Message{
 				Role: session.RoleUser, Text: "[send failed: " + err.Error() + "]",
 			}
 			m.refreshViewport()
 			m.viewport.GotoBottom()
-			return m, nil
+			return
 		}
-		m.state = stateIdle
+		m.state = stateNav
+		m.textarea.Blur()
+		m.textarea.Reset()
+		m.reflow()
+	}
+}
+
+func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, defaultKeyMap.IncludeComments):
+		m.includeComments = !m.includeComments
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.Cancel):
+		m.state = stateNav
 		m.textarea.Blur()
 		m.textarea.Reset()
 		m.reflow()
 		return m, nil
-	case key.Matches(msg, defaultKeyMap.Cancel):
-		m.state = stateIdle
-		m.textarea.Blur()
-		m.textarea.Reset()
-		m.reflow()
+	}
+	// `s` is the universal send — dispatch via NavHandle so the
+	// single-rune path is the source of truth (matches D3 / D4).
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's' {
+		m.handleSend()
 		return m, nil
 	}
 	var taCmd tea.Cmd
 	m.textarea, taCmd = m.textarea.Update(msg)
 	return m, taCmd
-}
-
-func (m *model) applyAction(a render.VimAction) {
-	switch a {
-	case render.VimLineDown:
-		m.viewport.LineDown(1)
-	case render.VimLineUp:
-		m.viewport.LineUp(1)
-	case render.VimNextBlock:
-		if y := render.JumpBlock(m.blocks, render.CurrentBlockIdx(m.blocks, m.viewport.YOffset), +1); y >= 0 {
-			m.viewport.SetYOffset(y)
-		}
-	case render.VimPrevBlock:
-		if y := render.JumpBlock(m.blocks, render.CurrentBlockIdx(m.blocks, m.viewport.YOffset), -1); y >= 0 {
-			m.viewport.SetYOffset(y)
-		}
-	case render.VimNextHeading:
-		if y := render.JumpHeading(m.blocks, render.CurrentBlockIdx(m.blocks, m.viewport.YOffset), +1); y >= 0 {
-			m.viewport.SetYOffset(y)
-		}
-	case render.VimPrevHeading:
-		if y := render.JumpHeading(m.blocks, render.CurrentBlockIdx(m.blocks, m.viewport.YOffset), -1); y >= 0 {
-			m.viewport.SetYOffset(y)
-		}
-	case render.VimGotoTop:
-		m.viewport.GotoTop()
-	case render.VimGotoBottom:
-		m.viewport.GotoBottom()
-	}
 }
 
 func (m *model) reflow() {
@@ -814,7 +688,7 @@ func (m *model) reflow() {
 	}
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
-	if m.state == stateCompose || m.state == stateIdle {
+	if m.state == stateCompose || m.state == stateNav {
 		m.textarea.SetWidth(m.width)
 	}
 }
@@ -851,19 +725,20 @@ func (m model) ShortHelp() []key.Binding {
 			defaultKeyMap.Up, defaultKeyMap.Down,
 			defaultKeyMap.Pick, defaultKeyMap.Help,
 		}
-	case stateIdle:
+	case stateNav:
 		return []key.Binding{
-			defaultKeyMap.Compose, defaultKeyMap.SubmitComments,
-			defaultKeyMap.Mark, defaultKeyMap.Help,
+			defaultKeyMap.NavGroup,
+			defaultKeyMap.Help,
 		}
 	case stateCompose:
 		return []key.Binding{
-			defaultKeyMap.Send, defaultKeyMap.IncludeComments,
+			defaultKeyMap.IncludeComments,
 			defaultKeyMap.Cancel, defaultKeyMap.Help,
 		}
 	case stateCommentComposer:
 		return []key.Binding{
-			defaultKeyMap.Send, defaultKeyMap.Cancel,
+			defaultKeyMap.SaveComment,
+			defaultKeyMap.Cancel,
 		}
 	case stateError:
 		return []key.Binding{defaultKeyMap.QuitError}
@@ -892,26 +767,20 @@ func helpGroupsForState(s state) [][]key.Binding {
 			{defaultKeyMap.Pick},
 			{defaultKeyMap.QuitPick, defaultKeyMap.Help},
 		}
-	case stateIdle:
+	case stateNav:
 		return [][]key.Binding{
-			{defaultKeyMap.LineDown, defaultKeyMap.LineUp, defaultKeyMap.NextBlock, defaultKeyMap.PrevBlock, defaultKeyMap.BottomLine},
-			{defaultKeyMap.Mark, defaultKeyMap.Visual},
-			{defaultKeyMap.VisualDown, defaultKeyMap.VisualUp, defaultKeyMap.VisualNextBlock, defaultKeyMap.VisualPrevBlock, defaultKeyMap.VisualOpen, defaultKeyMap.VisualExit},
-			{defaultKeyMap.EditComment, defaultKeyMap.DeleteComment, defaultKeyMap.NextComment, defaultKeyMap.PrevComment, defaultKeyMap.SubmitComments},
-			{defaultKeyMap.Compose},
-			{defaultKeyMap.Refresh},
-			{defaultKeyMap.QuitIdle, defaultKeyMap.Help},
+			{defaultKeyMap.NavGroup},
+			{defaultKeyMap.Help},
 		}
 	case stateCompose:
 		return [][]key.Binding{
-			{defaultKeyMap.Send},
 			{defaultKeyMap.Newline},
 			{defaultKeyMap.IncludeComments},
 			{defaultKeyMap.Cancel, defaultKeyMap.Help},
 		}
 	case stateCommentComposer:
 		return [][]key.Binding{
-			{defaultKeyMap.Send},
+			{defaultKeyMap.SaveComment},
 			{defaultKeyMap.Cancel},
 		}
 	case stateError:
@@ -964,12 +833,11 @@ func (m *model) refreshViewport() {
 }
 
 // focusedBlockIdx returns the block index that should carry the
-// highlight. In visual mode the cursor is independent of the
-// viewport's scroll position, so we follow the visual cursor; out of
-// visual mode we fall back to the viewport-driven YOffset.
+// highlight. With the single-cursor model, the cursor's blockIdx
+// drives the highlight in all states (visual or not).
 func (m *model) focusedBlockIdx() int {
-	if m.visual.Mode == render.SelLine && m.visual.CurBlock >= 0 {
-		return m.visual.CurBlock
+	if m.cursor.BlockIdx >= 0 && m.cursor.BlockIdx < len(m.blocks) {
+		return m.cursor.BlockIdx
 	}
 	return render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
 }
@@ -980,7 +848,6 @@ func (m *model) focusedBlockIdx() int {
 func (m *model) injectGutter(rendered string) string {
 	return render.InjectGutter(rendered, m.blocks, m.focusedBlockIdx())
 }
-
 
 func (m model) View() string {
 	// Help footer is rendered for every state; `?` flips it between
@@ -1064,7 +931,7 @@ func (m model) pickerView() string {
 	for i, a := range m.agents {
 		marker := "  "
 		style := normalStyle
-		if i == m.cursor {
+		if i == m.pickCursor {
 			marker = "▶ "
 			style = selectedStyle
 		}
@@ -1097,7 +964,7 @@ func (m model) statusLine() string {
 	// borders follow viewport.YOffset, not the visual cursor), so
 	// surface it here as the only signal that V did something.
 	rendered := statusBarStyle.Render(text)
-	if m.visual.Mode == render.SelLine {
+	if m.nav.Visual == render.NavLine {
 		rendered += visualModeStyle.Render(" VISUAL ")
 	}
 	if m.width <= 0 {

@@ -17,10 +17,10 @@ import (
 func TestAttach_PopulatesViewportImmediately(t *testing.T) {
 	m := newModel()
 	m.agents = []session.AgentSession{{Session: "s", Window: "0", Pane: "0", PaneID: "%1", Agent: "pi"}}
-	m.cursor = 0
+	m.pickCursor = 0
 	m.src = &fakeSource{}
 	m.hist = nil
-	m.state = stateIdle
+	m.state = stateNav
 	m.viewport = viewport.New(80, 20)
 	m.width = 80
 	m.height = 24
