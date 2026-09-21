@@ -11,34 +11,29 @@ import (
 	"time"
 )
 
-// debug controls whether session-discovery diagnostics are printed to
-// stderr. Enabled by the PINKY_DEBUG env var. Off by default.
-func debug() bool {
-	return os.Getenv("PINKY_DEBUG") != ""
-}
-
-func debugf(format string, args ...any) {
-	if debug() {
-		fmt.Fprintf(os.Stderr, "pinky: "+format+"\n", args...)
-	}
-}
-
 // piSource tails a pi agent session JSONL file.
 type piSource struct {
 	path   string
 	offset int64
 }
 
+// debugLogf prints a debug line to stderr when PINKY_DEBUG is set.
+func debugLogf(format string, args ...any) {
+	if os.Getenv("PINKY_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "pinky: "+format+"\n", args...)
+	}
+}
+
 func openPi(pid int, cwd string) (*piSource, error) {
 	// 1. PI_SESSION_FILE is the canonical fast path.
 	if path, ok := envValue(pid, "PI_SESSION_FILE"); ok && path != "" {
 		if _, err := os.Stat(path); err == nil {
-			debugf("openPi(%d): using PI_SESSION_FILE=%s", pid, path)
+			debugLogf("openPi(%d): using PI_SESSION_FILE=%s", pid, path)
 			return &piSource{path: path}, nil
 		}
-		debugf("openPi(%d): PI_SESSION_FILE set but stat failed", pid)
+		debugLogf("openPi(%d): PI_SESSION_FILE set but stat failed", pid)
 	} else {
-		debugf("openPi(%d): PI_SESSION_FILE not set in env", pid)
+		debugLogf("openPi(%d): PI_SESSION_FILE not set in env", pid)
 	}
 	// 2. cwd-based discovery (pi-mono convention, used by plannotator):
 	//    <sessions>/--<encoded cwd>--/<timestamp>_<uuid>.jsonl
@@ -46,37 +41,29 @@ func openPi(pid int, cwd string) (*piSource, error) {
 	//    pick the bucket directory.
 	if cwd != "" {
 		if path, err := openPiByCwd(cwd); err == nil {
-			debugf("openPi(%d): discovered via cwd %s: %s", pid, cwd, path)
+			debugLogf("openPi(%d): discovered via cwd %s: %s", pid, cwd, path)
 			return &piSource{path: path}, nil
 		} else {
-			debugf("openPi(%d): cwd-based discovery failed: %v", pid, err)
+			debugLogf("openPi(%d): cwd-based discovery failed: %v", pid, err)
 		}
 	}
 	// 3. Last resort: lsof on the process. Some setups (containers,
 	//    wrapped agents) keep the session file open even when the cwd
 	//    bucket is empty or mis-located.
 	if path, err := piSessionFile(pid); err == nil {
-		debugf("openPi(%d): discovered via lsof: %s", pid, path)
+		debugLogf("openPi(%d): discovered via lsof: %s", pid, path)
 		return &piSource{path: path}, nil
 	} else {
-		debugf("openPi(%d): lsof fallback failed: %v", pid, err)
+		debugLogf("openPi(%d): lsof fallback failed: %v", pid, err)
 	}
 	return nil, fmt.Errorf("pi process %d: no session file found\n\n"+
 		"troubleshooting:\n"+
 		"  - PI_SESSION_FILE not set in the process env\n"+
-		"  - cwd-based lookup under %s found nothing\n"+
-		"  - lsof on pid %d found no open .jsonl\n"+
+		"  - cwd-based lookup under the pi sessions root found nothing\n"+
+		"  - lsof on the process found no open .jsonl\n"+
 		"  - run with PINKY_DEBUG=1 for verbose discovery output\n"+
 		"  - bypass with --session-file /path/to/session.jsonl",
-		pid, piAgentDirOrDefault(), pid)
-}
-
-func piAgentDirOrDefault() string {
-	dir, err := piSessionDir()
-	if err != nil {
-		return "<unresolved>"
-	}
-	return dir
+		pid)
 }
 
 // openPiByCwd finds pi's session file via the cwd-based convention
@@ -99,8 +86,8 @@ func piSessionFile(pid int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("lsof failed (is lsof installed?): %w", err)
 	}
-	if debug() {
-		debugf("lsof -p %d (raw):\n%s", pid, indent(string(out)))
+	if os.Getenv("PINKY_DEBUG") != "" {
+		debugLogf("lsof -p %d (raw):\n%s", pid, strings.ReplaceAll(string(out), "\n", "\n    "))
 	}
 	got := parseLsofJSONL(string(out))
 	if got == "" {
@@ -110,14 +97,6 @@ func piSessionFile(pid int) (string, error) {
 		return "", fmt.Errorf("lsof-discovered session %q: %w", got, err)
 	}
 	return got, nil
-}
-
-func indent(s string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
-		b.WriteString("    " + line + "\n")
-	}
-	return b.String()
 }
 
 // parseLsofJSONL extracts the most recently modified .jsonl file path

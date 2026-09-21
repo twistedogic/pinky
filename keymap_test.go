@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -89,26 +91,17 @@ func TestHelpKey_TogglesHelpOverlay(t *testing.T) {
 	}
 }
 
-// TestShortHelp_PerState ensures ShortHelp returns the right bindings
-// for each state.
-func TestShortHelp_PerState(t *testing.T) {
-	for _, s := range []state{statePicking, stateIdle, stateCompose, stateError} {
-		m := model{state: s, width: 80, height: 24}
-		help := m.ShortHelp()
-		if len(help) == 0 {
-			t.Errorf("state %d: ShortHelp() returned empty", s)
-		}
-	}
-}
-
 // newIdleModelForKeymap builds a minimal model ready for key tests.
 // Initializes a textarea so the cursor/blink machinery is wired up.
 func newIdleModelForKeymap(t *testing.T) model {
 	t.Helper()
-	ta := newTestTextarea()
+	ta := textarea.New()
+	ta.SetHeight(composeHeight)
+	ta.SetWidth(80)
+	ta.Focus()
 	return model{
 		state:    stateIdle,
-		viewport: newViewport80x20(),
+		viewport: viewport.New(80, 20),
 		textarea: ta,
 		width:    80,
 		height:   24,

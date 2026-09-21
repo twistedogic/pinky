@@ -60,33 +60,41 @@ func NewRenderer(width int) (*glamour.TermRenderer, error) {
 	)
 }
 
-// BuildBlockIndex parses md and returns one Block per non-empty
-// top-level block (heading, paragraph, code block, list item,
-// blockquote). Empty paragraphs, thematic breaks, and HTML blocks are
-// excluded. List items each become their own block.
-func BuildBlockIndex(md string, width int) []Block {
-	src := []byte(md)
-	mdParser := goldmark.New(
+// renderBlocks parses md and renders each non-empty top-level block
+// (heading, paragraph, code block, list item, blockquote). Empty
+// paragraphs, thematic breaks, and HTML blocks are dropped. Each
+// block is rendered exactly once and concatenated into the returned
+// string; the []Block index carries (Kind, Source, line range) into
+// that output.
+func renderBlocks(md string, width int) (string, []Block) {
+	r, err := NewRenderer(width)
+	if err != nil {
+		return md, nil
+	}
+	root := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,           // GitHub-flavored markdown (tables, strikethrough, task lists, autolinks)
 			extension.Linkify,       // auto-detect URLs in text and turn them into links
 			extension.DefinitionList,
 		),
-	)
-	root := mdParser.Parser().Parse(text.NewReader(src))
+	).Parser().Parse(text.NewReader([]byte(md)))
+	src := []byte(md)
 
-	r, err := NewRenderer(width)
-	if err != nil {
-		return nil
-	}
-
-	var out []Block
+	var buf bytes.Buffer
+	var blocks []Block
 	line := 0
 	for child := root.FirstChild(); child != nil; child = child.NextSibling() {
 		for _, ext := range extract(child, src) {
 			rendered, _ := r.Render(ext.source + "\n")
+			if rendered == "" {
+				continue
+			}
 			count := lineCount(rendered)
-			out = append(out, Block{
+			if count == 0 {
+				continue
+			}
+			buf.WriteString(rendered)
+			blocks = append(blocks, Block{
 				Kind:      ext.kind,
 				Source:    ext.source,
 				StartLine: line,
@@ -95,27 +103,20 @@ func BuildBlockIndex(md string, width int) []Block {
 			line += count
 		}
 	}
-	return out
+	return buf.String(), blocks
 }
 
 // RenderMessage renders md block-by-block and returns the concatenated
-// rendered string plus the block index. The block index is the same one
-// BuildBlockIndex would return for the same md and width.
+// rendered string plus the matching block index.
 func RenderMessage(md string, width int) (string, []Block) {
-	r, err := NewRenderer(width)
-	if err != nil {
-		return md, nil
-	}
-	blocks := BuildBlockIndex(md, width)
-	var buf bytes.Buffer
-	for _, b := range blocks {
-		out, err := r.Render(b.Source + "\n")
-		if err != nil {
-			continue
-		}
-		buf.WriteString(out)
-	}
-	return buf.String(), blocks
+	return renderBlocks(md, width)
+}
+
+// BuildBlockIndex returns just the block index for md (no rendered
+// string). Provided for callers that only need navigation.
+func BuildBlockIndex(md string, width int) []Block {
+	_, blocks := renderBlocks(md, width)
+	return blocks
 }
 
 // CurrentBlockIdx returns the index of the block containing the given

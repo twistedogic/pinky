@@ -15,8 +15,7 @@ import (
 // binding matched.
 type keyMap struct {
 	// Shared
-	Quit   key.Binding // q, ctrl+c
-	Help   key.Binding // ?
+	Help key.Binding // ?
 
 	// Picker
 	Up       key.Binding // k, ↑
@@ -29,14 +28,8 @@ type keyMap struct {
 	LineUp      key.Binding // k, ↑
 	NextBlock   key.Binding // }
 	PrevBlock   key.Binding // {
-	TopLine     key.Binding // gg (first key)
-	TopSecond  key.Binding // gg (second key)
-	BottomLine  key.Binding // G
-	NextHeadingFirst  key.Binding // ]] (first key)
-	NextHeadingSecond key.Binding // ]] (second key)
-	PrevHeadingFirst  key.Binding // [[ (first key)
-	PrevHeadingSecond key.Binding // [[ (second key)
-	Compose key.Binding // ctrl+n, c
+	BottomLine key.Binding // G
+	Compose    key.Binding // ctrl+n, c
 	Refresh key.Binding // ctrl+r
 	QuitIdle key.Binding // q (in idle)
 
@@ -51,10 +44,6 @@ type keyMap struct {
 
 // defaultKeyMap is the singleton keymap used at runtime.
 var defaultKeyMap = keyMap{
-	Quit: key.NewBinding(
-		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q", "quit"),
-	),
 	Help: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "toggle help"),
@@ -95,33 +84,9 @@ var defaultKeyMap = keyMap{
 		key.WithKeys("{"),
 		key.WithHelp("{", "prev block"),
 	),
-	TopLine: key.NewBinding(
-		key.WithKeys("g"),
-		key.WithHelp("g", "(first of gg)"),
-	),
-	TopSecond: key.NewBinding(
-		key.WithKeys("g"),
-		key.WithHelp("g", "(second of gg)"),
-	),
 	BottomLine: key.NewBinding(
 		key.WithKeys("G"),
 		key.WithHelp("G", "bottom"),
-	),
-	NextHeadingFirst: key.NewBinding(
-		key.WithKeys("]"),
-		key.WithHelp("]", "(first of ]])"),
-	),
-	NextHeadingSecond: key.NewBinding(
-		key.WithKeys("]"),
-		key.WithHelp("]", "(second of ]])"),
-	),
-	PrevHeadingFirst: key.NewBinding(
-		key.WithKeys("["),
-		key.WithHelp("[", "(first of [[)"),
-	),
-	PrevHeadingSecond: key.NewBinding(
-		key.WithKeys("["),
-		key.WithHelp("[", "(second of [[)"),
 	),
 	Compose: key.NewBinding(
 		key.WithKeys("ctrl+n", "c"),
@@ -157,41 +122,3 @@ var defaultKeyMap = keyMap{
 	),
 }
 
-// helpVisible controls whether the in-TUI help overlay is shown.
-type helpVisible bool
-
-// ShortHelp returns the single-line help for the status bar. The set
-// of bindings depends on the current model state.
-func (m model) ShortHelp() []key.Binding {
-	switch m.state {
-	case statePicking:
-		return []key.Binding{
-			defaultKeyMap.Up, defaultKeyMap.Down, defaultKeyMap.Pick,
-			defaultKeyMap.QuitPick, defaultKeyMap.Help,
-		}
-	case stateIdle:
-		return []key.Binding{
-			defaultKeyMap.LineDown, defaultKeyMap.LineUp,
-			defaultKeyMap.NextBlock, defaultKeyMap.Compose,
-			defaultKeyMap.QuitIdle, defaultKeyMap.Help,
-		}
-	case stateCompose:
-		return []key.Binding{
-			defaultKeyMap.Send, defaultKeyMap.Cancel, defaultKeyMap.Help,
-		}
-	case stateError:
-		return []key.Binding{defaultKeyMap.QuitError, defaultKeyMap.Help}
-	}
-	return nil
-}
-
-// FullHelp returns the multi-column help for the ? overlay.
-func (m model) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{defaultKeyMap.LineDown, defaultKeyMap.LineUp},
-		{defaultKeyMap.NextBlock, defaultKeyMap.PrevBlock},
-		{defaultKeyMap.BottomLine},
-		{defaultKeyMap.Compose, defaultKeyMap.Refresh},
-		{defaultKeyMap.Quit, defaultKeyMap.Help},
-	}
-}

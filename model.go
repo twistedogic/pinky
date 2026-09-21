@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/twistedogic/pinky/internal/history"
@@ -31,7 +30,6 @@ const (
 type entry struct {
 	role string
 	text string
-	ts   time.Time
 }
 
 type state int
@@ -43,7 +41,6 @@ const (
 	stateError
 )
 
-type tickMsg time.Time
 type sessionMsg struct {
 	entries []entry
 	err     error
@@ -63,10 +60,8 @@ type model struct {
 
 	// Latest-message view state. pinky always renders the most recent
 	// assistant message; older messages are not displayed.
-	latest   entry
-	blocks   []render.Block
-	renderer *glamour.TermRenderer
-	rendW    int
+	latest entry
+	blocks []render.Block
 
 	viewport viewport.Model
 	textarea textarea.Model
@@ -74,7 +69,6 @@ type model struct {
 	width, height int
 
 	streaming   bool
-	lastChanged time.Time
 
 	vim render.VimState
 
@@ -192,17 +186,13 @@ func (m *model) selectAgent(idx int) error {
 
 func (m model) Init() tea.Cmd {
 	if m.state == stateIdle {
-		return tea.Batch(tickCmd(), pollCmd(m.src))
+		return pollCmd(m.src)
 	}
 	return nil
 }
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(pollInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
-}
-
 func pollCmd(src session.Source) tea.Cmd {
-	return func() tea.Msg {
+	return tea.Tick(pollInterval, func(time.Time) tea.Msg {
 		msgs, err := src.NewMessages()
 		if err != nil {
 			return sessionMsg{err: err}
@@ -213,10 +203,10 @@ func pollCmd(src session.Source) tea.Cmd {
 			if m.Role == session.RoleUser {
 				role = roleUser
 			}
-			entries = append(entries, entry{role: role, text: m.Text, ts: m.Ts})
+			entries = append(entries, entry{role: role, text: m.Text})
 		}
 		return sessionMsg{entries: entries}
-	}
+	})
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -225,20 +215,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.reflow()
-		// Force renderer rebuild on width change.
-		m.renderer = nil
 		m.refreshViewport()
 		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
-	case tickMsg:
-		return m, tea.Batch(pollCmd(m.src), tickCmd())
-
 	case sessionMsg:
 		if msg.err != nil {
-			return m, tickCmd()
+			return m, pollCmd(m.src)
 		}
 		if len(msg.entries) == 0 {
 			m.streaming = false
@@ -260,7 +245,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.hist.Append(last.role, last.text)
 		}
 		m.streaming = true
-		m.lastChanged = time.Now()
 		m.refreshViewport()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -323,12 +307,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // showHelpMarkdown renders the per-state keymap as markdown via the
 // existing glamour pipeline and pushes it into the viewport.
 func (m *model) showHelpMarkdown() {
-	r := m.getRenderer()
-	if r == nil {
+	rendered, _ := render.RenderMessage(keymapMarkdown(m.state), m.width)
+	if rendered == "" {
 		m.viewport.SetContent(keymapMarkdown(m.state))
 		return
 	}
-	rendered, _ := render.RenderMessage(keymapMarkdown(m.state), m.width)
 	m.viewport.SetContent(rendered)
 }
 
@@ -356,7 +339,7 @@ func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// attach() already seeded the viewport with the placeholder
 		// (or the current latest). Just kick off polling.
-		return m, tea.Batch(tickCmd(), pollCmd(m.src))
+		return m, pollCmd(m.src)
 	case key.Matches(msg, defaultKeyMap.QuitPick):
 		return m, tea.Quit
 	}
@@ -364,15 +347,11 @@ func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) moveCursor(delta int) {
-	if len(m.agents) == 0 {
+	n := len(m.agents)
+	if n == 0 {
 		return
 	}
-	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = len(m.agents) - 1
-	} else if m.cursor >= len(m.agents) {
-		m.cursor = 0
-	}
+	m.cursor = (m.cursor + delta + n) % n
 }
 
 func (m model) handleIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -431,8 +410,7 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.latest = entry{
 				role: roleUser,
 				text: "[send failed: " + err.Error() + "]",
-				ts:   time.Now(),
-			}
+				}
 			m.refreshViewport()
 			m.viewport.GotoBottom()
 			return m, nil
@@ -501,20 +479,6 @@ func (m *model) reflow() {
 	}
 }
 
-// getRenderer returns a cached glamour renderer for the current width,
-// rebuilding it if the width changed.
-func (m *model) getRenderer() *glamour.TermRenderer {
-	if m.renderer == nil || m.rendW != m.width {
-		r, err := render.NewRenderer(m.width)
-		if err != nil {
-			return nil
-		}
-		m.renderer = r
-		m.rendW = m.width
-	}
-	return m.renderer
-}
-
 // borderStyle is the lipgloss style for the current-block indicator.
 // Same color family as the picker header (212 accent).
 var borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
@@ -536,13 +500,12 @@ func (m *model) refreshViewport() {
 		m.viewport.SetContent(placeholderStyle.Render(placeholderText))
 		return
 	}
-	r := m.getRenderer()
-	if r == nil {
-		// Render failed (very narrow terminal): fall back to plain text.
+	rendered, blocks := render.RenderMessage(m.latest.text, m.width)
+	if rendered == "" {
+		// Renderer rejected this width (very narrow terminal): plain-text fallback.
 		m.viewport.SetContent(m.latest.text)
 		return
 	}
-	rendered, blocks := render.RenderMessage(m.latest.text, m.width)
 	m.blocks = blocks
 	m.viewport.SetContent(m.injectBorder(rendered))
 }

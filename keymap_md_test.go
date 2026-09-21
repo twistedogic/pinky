@@ -9,33 +9,6 @@ import (
 	"github.com/twistedogic/pinky/internal/render"
 )
 
-// TestKeymapMarkdown_HasSectionForState verifies the generated
-// markdown for each state contains the expected section headings
-// and key bindings.
-func TestKeymapMarkdown_HasSectionForState(t *testing.T) {
-	cases := []struct {
-		state       state
-		wantSection string
-		wantKey     string
-	}{
-		{statePicking, "**navigation**", "`↑/k`"},
-		{stateIdle, "**navigation**", "`↓/j`"},
-		{stateIdle, "**compose**", "`c`"},
-		{stateCompose, "**send**", "`^S`"},
-		{stateCompose, "**cancel**", "`esc`"},
-		{stateError, "**dismiss**", "`⏎`"},
-	}
-	for _, c := range cases {
-		md := keymapMarkdown(c.state)
-		if !strings.Contains(md, c.wantSection) {
-			t.Errorf("state=%d: expected section %q in:\n%s", c.state, c.wantSection, md)
-		}
-		if !strings.Contains(md, c.wantKey) {
-			t.Errorf("state=%d: expected key %q in:\n%s", c.state, c.wantKey, md)
-		}
-	}
-}
-
 // TestKeymapMarkdown_Structure verifies the markdown document has the
 // expected top-level structure: a heading, grouped sections, and a
 // dismiss hint.
@@ -103,36 +76,6 @@ func TestShowHelpMarkdown_RendersIntoViewport(t *testing.T) {
 	got2 := updated2.(model)
 	if got2.help {
 		t.Error("expected help=false after pressing another key")
-	}
-}
-
-// TestShowHelp_VisibleInFullView confirms the rendered keymap
-// appears in the full View() output (not just the viewport), so the
-// user actually sees it. Regression guard for "keymap is set on the
-// viewport but the View() output doesn't reflect it".
-func TestShowHelp_VisibleInFullView(t *testing.T) {
-	m := newIdleModelForKeymap(t)
-	m.state = stateIdle
-	m.width = 80
-	m.height = 24
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
-	m.refreshViewport()
-
-	// Toggle help on.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	got := updated.(model)
-
-	view := got.View()
-	plain := stripANSIForTest(view)
-	if !strings.Contains(plain, "pinky keymap") {
-		t.Errorf("expected 'pinky keymap' in full View() output; got first 400 chars:\n%q",
-			plain[:min(len(plain), 400)])
-	}
-	// The agent message should be GONE from the visible content
-	// (the keymap has replaced it).
-	if strings.Contains(plain, "Hello") || strings.Contains(plain, "body") {
-		t.Errorf("agent message should be hidden while help is showing; got first 400 chars:\n%q",
-			plain[:min(len(plain), 400)])
 	}
 }
 

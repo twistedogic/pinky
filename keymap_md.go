@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // keymapMarkdown returns a markdown document describing the keys
@@ -100,13 +99,3 @@ func keymapGroupsForState(s state) []keymapGroup {
 	return nil
 }
 
-// Compile-time guard: tea.KeyMsg stays imported for any future
-// helper signatures that need it.
-var _ tea.KeyMsg
-
-// Compile-time guard: keep key.Binding reachable from this file.
-var _ key.Binding
-
-// Compile-time guard for unused-import suppression when groups are
-// empty (e.g. an unknown state falls through to nil).
-var _ = []keymapGroup(nil)

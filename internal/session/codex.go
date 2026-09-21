@@ -22,17 +22,17 @@ func openCodex(pid int, cwd string) (*codexSource, error) {
 	//    depend on cwd, but the date tree makes this the most
 	//    reliable fallback.
 	if path, err := codexByCwd(cwd); err == nil {
-		debugf("openCodex(%d): discovered via sessions root: %s", pid, path)
+		debugLogf("openCodex(%d): discovered via sessions root: %s", pid, path)
 		return &codexSource{path: path}, nil
 	} else {
-		debugf("openCodex(%d): cwd-based discovery failed: %v", pid, err)
+		debugLogf("openCodex(%d): cwd-based discovery failed: %v", pid, err)
 	}
 	// 2. lsof fallback (existing).
 	if path, err := codexSessionFile(pid); err == nil {
-		debugf("openCodex(%d): discovered via lsof: %s", pid, path)
+		debugLogf("openCodex(%d): discovered via lsof: %s", pid, path)
 		return &codexSource{path: path}, nil
 	} else {
-		debugf("openCodex(%d): lsof fallback failed: %v", pid, err)
+		debugLogf("openCodex(%d): lsof fallback failed: %v", pid, err)
 	}
 	return nil, fmt.Errorf("codex process %d: no session file found\n\n"+
 		"troubleshooting:\n"+

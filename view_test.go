@@ -10,13 +10,6 @@ import (
 	"github.com/twistedogic/pinky/internal/session"
 )
 
-// helper: build a minimal model that just renders View() so we can
-// assert on the output.
-func renderView(t *testing.T, m model) string {
-	t.Helper()
-	return m.View()
-}
-
 func TestView_PadsPickerToFullWidth(t *testing.T) {
 	m := newModel()
 	m.agents = []session.AgentSession{
@@ -26,7 +19,7 @@ func TestView_PadsPickerToFullWidth(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	view := renderView(t, m)
+	view := m.View()
 	for _, line := range strings.Split(view, "\n") {
 		if w := visualLen(line); w != m.width {
 			t.Errorf("line width = %d want %d\n  line: %q", w, m.width, line)
@@ -42,7 +35,7 @@ func TestView_PadsStatusLineToFullWidth(t *testing.T) {
 	m.height = 24
 	m.viewport = viewport.New(80, 20)
 
-	view := renderView(t, m)
+	view := m.View()
 	lines := strings.Split(view, "\n")
 	last := lines[len(lines)-1]
 	if w := visualLen(last); w != m.width {

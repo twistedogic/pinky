@@ -12,9 +12,6 @@ import (
 // ErrTmuxNotRunning is returned when $TMUX is unset.
 var ErrTmuxNotRunning = errors.New("tmux not running: $TMUX is unset")
 
-// ErrPaneMissing is returned when a target pane does not exist.
-var ErrPaneMissing = errors.New("tmux pane not found")
-
 // Run executes tmux with the given args and returns trimmed stdout.
 func Run(args ...string) (string, error) {
 	out, err := exec.Command("tmux", args...).Output()

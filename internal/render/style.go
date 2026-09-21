@@ -1,7 +1,6 @@
 package render
 
 import (
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
 )
 
@@ -122,13 +121,3 @@ func stringPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
 func uintPtr(u uint) *uint       { return &u }
 
-// pinkyRenderer returns a glamour TermRenderer pre-configured with
-// the pinky style. Cached by the caller per width.
-func pinkyRenderer(width int) *glamour.TermRenderer {
-	r, _ := glamour.NewTermRenderer(
-		glamour.WithStyles(pinkyStyle()),
-		glamour.WithChromaFormatter("terminal256"),
-		glamour.WithWordWrap(width+2),
-	)
-	return r
-}

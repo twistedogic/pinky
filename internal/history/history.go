@@ -2,9 +2,7 @@
 package history
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,9 +42,6 @@ func Open(paneID string) (*History, error) {
 	return &History{path: path, paneID: paneID, f: f, enc: json.NewEncoder(f)}, nil
 }
 
-// Path returns the resolved history file path (computed even before Open).
-func Path() (string, error) { return defaultPath() }
-
 func defaultPath() (string, error) {
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "pinky", "history.jsonl"), nil
@@ -76,33 +71,3 @@ func (h *History) Close() error {
 	return h.f.Close()
 }
 
-// Load reads all history entries for the given pane, oldest first.
-// Malformed lines are skipped.
-func Load(paneID string) ([]Entry, error) {
-	path, err := defaultPath()
-	if err != nil {
-		return nil, err
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	var out []Entry
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		var e Entry
-		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
-			continue
-		}
-		if e.PaneID == paneID {
-			out = append(out, e)
-		}
-	}
-	return out, sc.Err()
-}

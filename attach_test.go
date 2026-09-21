@@ -10,13 +10,6 @@ import (
 	"github.com/twistedogic/pinky/internal/session"
 )
 
-// attachFakeSource is reused for attach-flow tests. Mirrors the one
-// in picker_test.go but kept local to avoid cross-file coupling.
-type attachFakeSource struct{}
-
-func (attachFakeSource) NewMessages() ([]session.Message, error) { return nil, nil }
-func (attachFakeSource) Close() error                            { return nil }
-
 // TestAttach_PopulatesViewportImmediately verifies that after the
 // seeding step the view contains the placeholder. Guards against
 // either path (picker / --target / --session-file) losing the
@@ -25,7 +18,7 @@ func TestAttach_PopulatesViewportImmediately(t *testing.T) {
 	m := newModel()
 	m.agents = []session.AgentSession{{Session: "s", Window: "0", Pane: "0", PaneID: "%1", Agent: "pi"}}
 	m.cursor = 0
-	m.src = attachFakeSource{}
+	m.src = &fakeSource{}
 	m.hist = nil
 	m.state = stateIdle
 	m.viewport = viewport.New(80, 20)
