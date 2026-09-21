@@ -60,18 +60,22 @@ func VisibleWidth(s string) int {
 }
 
 
-// gutterMarkerANSI is the foreground ANSI for the gutter marker prepended
-// to the first rendered line of a commented block.
-const gutterMarkerANSI = "[38;5;228m"
-
 // RenderMessageWithComments renders md and overlays comment annotations
 // on top of the result: a footnote line below each commented block,
-// a gutter marker on the first line of each commented block, and a
-// background tint over the commented range.
+// a background tint over the commented range, and the HasComment
+// flag set on every block that has at least one comment (used by the
+// model layer to draw the yellow left-gutter indicator).
 func RenderMessageWithComments(md string, width int, comments []Comment) (string, []Block) {
 	rendered, blocks := renderBlocks(md, width)
 	if len(comments) == 0 {
 		return rendered, blocks
+	}
+	// Flag any block with at least one comment so the model layer
+	// can render the yellow gutter without re-scanning the comments.
+	for _, c := range comments {
+		if c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
+			blocks[c.BlockIdx].HasComment = true
+		}
 	}
 	tinted := applyHighlights(rendered, blocks, comments, width)
 	withFootnotes := injectFootnotes(tinted, footnoteLines(blocks, comments))
@@ -115,9 +119,12 @@ func footnoteLines(blocks []Block, comments []Comment) []footnote {
 	return out
 }
 
-// applyHighlights rewrites rendered line-by-line, applying the gutter
-// marker on the first rendered line of each commented block and a
-// background tint over each commented block's rendered range.
+// applyHighlights rewrites rendered line-by-line, applying a background
+// tint over each commented block's rendered range. The block-level
+// ▸/• marker that previously lived on the first line of a commented
+// block has moved to the model layer's left-gutter (see
+// model.injectGutter); the footnote line below the block still uses
+// the marker via Comment.Marker().
 func applyHighlights(rendered string, blocks []Block, comments []Comment, width int) string {
 	if len(comments) == 0 {
 		return rendered
@@ -134,13 +141,6 @@ func applyHighlights(rendered string, blocks []Block, comments []Comment, width 
 			rangeByBlock[c.BlockIdx] = range_{start: cur.start, end: e}
 		}
 	}
-	// Pick the first comment per block as the marker source.
-	markerByBlock := make(map[int]string, len(blocks))
-	for _, c := range comments {
-		if _, ok := markerByBlock[c.BlockIdx]; !ok {
-			markerByBlock[c.BlockIdx] = c.Marker()
-		}
-	}
 	lines := strings.Split(rendered, "\n")
 	var b strings.Builder
 	for i, line := range lines {
@@ -148,9 +148,6 @@ func applyHighlights(rendered string, blocks []Block, comments []Comment, width 
 		if idx >= 0 {
 			if r, ok := rangeByBlock[idx]; ok && i >= r.start && i <= r.end {
 				line = tintLine(line, width)
-				if _, ok := markerByBlock[idx]; ok && i == r.start {
-					line = gutterMarkerANSI + markerByBlock[idx] + "[0m " + line
-				}
 			}
 		}
 		b.WriteString(line)
@@ -159,6 +156,44 @@ func applyHighlights(rendered string, blocks []Block, comments []Comment, width 
 		}
 	}
 	return b.String()
+}
+
+// InjectGutter writes a one-character left gutter in front of every
+// line of rendered: "▍" cyan for lines inside the focused block,
+// "▍" yellow for lines inside a block with comments, a space
+// otherwise. Cyan takes precedence over yellow so a focused-and-
+// commented block reads as "you're here" first, "has feedback"
+// second. Glamour's Document.Margin (1) is left in place so the
+// content sits one cell away from the gutter. Pure function — the
+// model layer passes its focused-block decision as a parameter.
+//
+// Exported because model.injectGutter wraps it with the live
+// focusedBlockIdx() call, and the unit tests assert the per-line
+// contract from inside this package.
+func InjectGutter(rendered string, blocks []Block, focused int) string {
+	const cyan = "\x1b[38;5;51m"
+	const yellow = "\x1b[38;5;228m"
+	const reset = "\x1b[0m"
+	lines := strings.Split(rendered, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		idx := CurrentBlockIdx(blocks, i)
+		switch {
+		case focused >= 0 && idx == focused:
+			b.WriteString(cyan)
+			b.WriteRune('▍')
+			b.WriteString(reset)
+		case idx >= 0 && blocks[idx].HasComment:
+			b.WriteString(yellow)
+			b.WriteRune('▍')
+			b.WriteString(reset)
+		default:
+			b.WriteByte(' ')
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // injectFootnotes inserts each footnote line immediately after its
@@ -218,53 +253,4 @@ func injectFootnotes(rendered string, footnotes []footnote) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-// TrimLeadingVisible strips n visible (non-ANSI) characters from
-// the start of s. Exposed so the model's border injection can reuse
-// it instead of keeping its own copy.
-func TrimLeadingVisible(s string, n int) string {
-	var b strings.Builder
-	skipped := 0
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			b.WriteRune(r)
-			continue
-		}
-		if inEscape {
-			b.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		if skipped < n {
-			skipped++
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// HasCommentGutter reports whether s starts with the gutter marker
-// (▸ or •) that the comment renderer prepends to the first line of
-// a commented block. Used so the left bar doesn't clobber the marker.
-func HasCommentGutter(s string) bool {
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		return r == '\u25B8' || r == '\u2022'
-	}
-	return false
 }

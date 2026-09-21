@@ -4,20 +4,20 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 )
 
-// pinkyStyle returns a glamour StyleConfig that uses the same color
-// family as pinky's lipgloss palette (212 accent, 250 body, 241 dim,
-// 42 user) so the rendered markdown feels native to the TUI.
-//
-// The hex values approximate the corresponding ANSI 256 colors so the
-// chroma syntax highlighter (which expects hex color strings) can
-// emit sensible ANSI output at render time.
+// pinkyStyle returns a glamour StyleConfig aligned with pinky's
+// lipgloss palette (51 cyan selection/headings, 228 yellow comments,
+// 250 body, 241 dim, 42 user, 212 picker accent). Headings use
+// weight+color only (no `#` prefix); Document.Margin=1 leaves room
+// for the model's left gutter.
 func pinkyStyle() ansi.StyleConfig {
 	const (
-		hex212 = "#d75fd7" // pink/magenta (heading accent)
+		hex51  = "#00d7d7" // cyan (selection + h1/h2)
+		hex87  = "#5fffff" // softer cyan (h3)
+		hex212 = "#d75fd7" // pink/magenta (picker header accent only)
 		hex250 = "#bcbcbc" // light gray (body text)
 		hex241 = "#626262" // dim gray (secondary)
 		hex42  = "#00d75f" // green (literal strings in code)
-		hex228 = "#ffdf00" // yellow (h1 highlight)
+		hex228 = "#ffdf00" // yellow (h1 highlight + comment gutter)
 	)
 
 	return ansi.StyleConfig{
@@ -27,7 +27,7 @@ func pinkyStyle() ansi.StyleConfig {
 				BlockSuffix: "\n",
 				Color:       stringPtr(hex250),
 			},
-			Margin: uintPtr(2),
+			Margin: uintPtr(1),
 		},
 		Heading: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
@@ -38,23 +38,24 @@ func pinkyStyle() ansi.StyleConfig {
 		},
 		H1: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Prefix: "# ",
-				Suffix: "",
-				Color:  stringPtr(hex228),
-				Bold:   boolPtr(true),
+				Prefix:    "",
+				Suffix:    "",
+				Color:     stringPtr(hex51),
+				Bold:      boolPtr(true),
+				Underline: boolPtr(true),
 			},
 		},
 		H2: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Prefix: "## ",
-				Color:  stringPtr(hex212),
+				Prefix: "",
+				Color:  stringPtr(hex51),
 				Bold:   boolPtr(true),
 			},
 		},
 		H3: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
-				Prefix: "### ",
-				Color:  stringPtr(hex212),
+				Prefix: "",
+				Color:  stringPtr(hex87),
 				Bold:   boolPtr(true),
 			},
 		},
@@ -120,4 +121,3 @@ func pinkyStyle() ansi.StyleConfig {
 func stringPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
 func uintPtr(u uint) *uint       { return &u }
-

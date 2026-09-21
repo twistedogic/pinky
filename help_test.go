@@ -211,30 +211,27 @@ func TestVisual_BracketMovesHighlight(t *testing.T) {
 		t.Errorf("} did not advance CurBlock: before=%d after=%d", startBlock, m.visual.CurBlock)
 	}
 
-	// The borders (heavy ━━━ lines) should bracket the new focused
-	// block. injectBorder inserts the leading border at the source
-	// StartLine (no lines before it have been rewritten) and the
-	// trailing border one line past the source EndLine (one extra
-	// border line was already emitted above).
+	// The cyan left-gutter (▍) should now bracket the new focused
+	// block's lines, NOT the previous block's. injectGutter writes
+	// one gutter char per line so we check that every line inside
+	// the new block starts with ▍ and the previous block's lines
+	// do not.
 	plain := stripANSI(m.View())
-	borders := borderLines(plain)
-	if len(borders) != 2 {
-		t.Fatalf("expected exactly 2 border lines, got %d:\n%s", len(borders), plain)
+	focused := m.blocks[m.visual.CurBlock]
+	prev := m.blocks[startBlock]
+	for i := focused.StartLine; i <= focused.EndLine; i++ {
+		line := lineAt(plain, i)
+		if !strings.HasPrefix(line, "▍") {
+			t.Errorf("focused block line %d should start with ▍ gutter; got %q", i, line)
+		}
 	}
-	wantStart := m.blocks[m.visual.CurBlock].StartLine
-	wantEnd := m.blocks[m.visual.CurBlock].EndLine + 2 // 1 extra for the leading border
-	if borders[0] != wantStart {
-		t.Errorf("leading border on rendered line %d, want %d\nview:\n%s", borders[0], wantStart, plain)
-	}
-	if borders[1] != wantEnd {
-		t.Errorf("trailing border on rendered line %d, want %d\nview:\n%s", borders[1], wantEnd, plain)
-	}
-	// Sanity check: block content sits between the borders, the
-	// neighboring blocks do NOT.
-	lines := strings.Split(plain, "\n")
-	for i := borders[0] + 1; i < borders[1]; i++ {
-		if strings.Contains(lines[i], "alpha") || strings.Contains(lines[i], "beta") {
-			t.Errorf("neighbor block content leaked inside the highlight at line %d: %q", i, lines[i])
+	for i := prev.StartLine; i <= prev.EndLine; i++ {
+		if i >= focused.StartLine && i <= focused.EndLine {
+			continue
+		}
+		line := lineAt(plain, i)
+		if strings.HasPrefix(line, "▍") {
+			t.Errorf("previous block line %d should NOT start with ▍ (focus moved); got %q", i, line)
 		}
 	}
 }
@@ -392,15 +389,13 @@ type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
-// borderLines returns the 0-indexed line numbers of every heavy
-// horizontal border (━━━━) in the rendered view. Used by visual-mode
-// tests to assert which block the highlight is currently around.
-func borderLines(plain string) []int {
-	var out []int
-	for i, line := range strings.Split(plain, "\n") {
-		if strings.Contains(line, "━━") {
-			out = append(out, i)
-		}
+// lineAt returns the i-th line of plain (0-indexed). Returns "" if i
+// is out of range. Used by visual-mode tests to assert per-line
+// gutter presence without scanning the whole view.
+func lineAt(plain string, i int) string {
+	lines := strings.Split(plain, "\n")
+	if i < 0 || i >= len(lines) {
+		return ""
 	}
-	return out
+	return lines[i]
 }

@@ -59,17 +59,27 @@ func TestRenderMessageWithComments_InlineFootnoteIncludesExcerpt(t *testing.T) {
 	}
 }
 
-func TestRenderMessageWithComments_GutterMarkerOnFirstLine(t *testing.T) {
+func TestRenderMessageWithComments_NoInBlockGutterMarker(t *testing.T) {
 	md := "# Title\n\nbody.\n"
 	comments := []Comment{
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "x", CreatedAt: mustTime(t)},
 	}
 	out, _ := RenderMessageWithComments(md, 80, comments)
-	// The gutter marker ▸ should appear on the FIRST line of the
-	// heading block (block 0, StartLine=0).
-	lines := strings.Split(stripANSIForRender(out), "\n")
-	if len(lines) == 0 || !strings.HasPrefix(lines[0], "▸") {
-		t.Errorf("expected gutter marker on first line of block; first line was: %q", lines[0])
+	plain := stripANSIForRender(out)
+	// The block-level marker ▸ must appear ONLY in the footnote line
+	// below the block, not prepended to the first line of the block
+	// itself. The yellow left gutter (added by the model layer)
+	// replaces the in-block marker.
+	lines := strings.Split(plain, "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected at least one line")
+	}
+	if strings.HasPrefix(lines[0], "▸") {
+		t.Errorf("first line of block should NOT start with ▸ (in-block marker removed); got %q", lines[0])
+	}
+	// And the footnote line below the block still carries the marker.
+	if !strings.Contains(plain, "▸") {
+		t.Errorf("expected ▸ in footnote line; got:\n%s", plain)
 	}
 }
 

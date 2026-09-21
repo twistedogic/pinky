@@ -5,29 +5,11 @@ import (
 	"testing"
 )
 
-// TestPinkyStyle_HeadingsPink verifies the pinky style applies the
-// 212 accent color to non-h1 headings. hex212 = "#d75fd7" → truecolor
-// "rgb(215,95,215)" emitted as "\x1b[38;2;215;95;215m". (h1 uses a
-// distinct yellow color and is covered by TestPinkyStyle_H1Yellow.)
-func TestPinkyStyle_HeadingsPink(t *testing.T) {
-	md := "## Subhead\n\nbody"
-	r, err := NewRenderer(80)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := r.Render(md)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "215;95;215") {
-		t.Errorf("expected pink heading color (215;95;215) in output; got:\n%s", out)
-	}
-}
-
-// TestPinkyStyle_H1Yellow verifies the pinky style gives h1 a
-// distinct yellow (hex228 = "#ffdf00") so the top-level heading
-// stands out from subheadings.
-func TestPinkyStyle_H1Yellow(t *testing.T) {
+// TestPinkyStyle_H1CyanBoldUnderlined verifies the h1 style is cyan
+// (hex51 = #00d7d7 → truecolor 0;215;215) with bold + underline,
+// and that the rendered line does NOT begin with `#` (the glamour
+// `Prefix` is "").
+func TestPinkyStyle_H1CyanBoldUnderlined(t *testing.T) {
 	md := "# Title\n\nbody"
 	r, err := NewRenderer(80)
 	if err != nil {
@@ -37,8 +19,65 @@ func TestPinkyStyle_H1Yellow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "255;223;0") {
-		t.Errorf("expected yellow h1 color (255;223;0) in output; got:\n%s", out)
+	plain := stripANSI(out)
+	if strings.HasPrefix(plain, "#") {
+		t.Errorf("h1 should NOT begin with '#' (no prefix); got first line: %q", strings.Split(plain, "\n")[0])
+	}
+	if !strings.Contains(out, "0;215;215") {
+		t.Errorf("expected cyan h1 color (0;215;215) in output; got:\n%s", out)
+	}
+}
+
+// TestPinkyStyle_H2CyanBold verifies the h2 style is cyan with bold
+// and no `##` prefix.
+func TestPinkyStyle_H2CyanBold(t *testing.T) {
+	md := "## Subhead\n\nbody"
+	r, err := NewRenderer(80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Render(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := stripANSI(out)
+	if strings.HasPrefix(plain, "#") {
+		t.Errorf("h2 should NOT begin with '#'; got first line: %q", strings.Split(plain, "\n")[0])
+	}
+	if !strings.Contains(out, "0;215;215") {
+		t.Errorf("expected cyan h2 color (0;215;215) in output; got:\n%s", out)
+	}
+}
+
+// TestPinkyStyle_H3SofterCyanBold verifies the h3 style uses the
+// softer cyan (hex87 = #5fffff → truecolor 95;255;255) with bold
+// and no `###` prefix.
+func TestPinkyStyle_H3SofterCyanBold(t *testing.T) {
+	md := "### Detail\n\nbody"
+	r, err := NewRenderer(80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Render(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := stripANSI(out)
+	if strings.HasPrefix(plain, "#") {
+		t.Errorf("h3 should NOT begin with '#'; got first line: %q", strings.Split(plain, "\n")[0])
+	}
+	if !strings.Contains(out, "95;255;255") {
+		t.Errorf("expected softer cyan h3 color (95;255;255) in output; got:\n%s", out)
+	}
+}
+
+// TestPinkyStyle_DocumentMargin verifies the glamour Document margin
+// is 1 (one leading cell), so the focus gutter sits in column 2 and
+// the total left indent matches the prior 2-margin + border layout.
+func TestPinkyStyle_DocumentMargin(t *testing.T) {
+	cfg := pinkyStyle()
+	if got := *cfg.Document.Margin; got != 1 {
+		t.Errorf("Document.Margin = %d want 1", got)
 	}
 }
 

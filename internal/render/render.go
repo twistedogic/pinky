@@ -33,23 +33,29 @@ const (
 // StartLine and EndLine are 0-indexed line offsets in the concatenated
 // rendered output produced by RenderMessage. They are contiguous: blocks
 // do not overlap, and consecutive blocks are joined back-to-back.
+//
+// HasComment is set true by RenderMessageWithComments when at least one
+// saved comment targets this block. RenderMessage leaves it false. The
+// flag drives the yellow left-gutter indicator in the rendered view.
 type Block struct {
-	Kind      BlockKind
-	Source    string
-	StartLine int
-	EndLine   int
+	Kind       BlockKind
+	Source     string
+	StartLine  int
+	EndLine    int
+	HasComment bool
 }
 
 // NewRenderer returns a glamour TermRenderer configured for pinky.
 // ponytail: cached by width at the call site; revisit if memory grows.
 //
 // The pinky style lives in style.go and uses the same color family
-// as the lipgloss TUI (212 accent, 250 body, 241 dim, 42 user),
-// so headings/links/etc feel native to the rest of the UI.
+// as the lipgloss TUI (51 cyan selection, 228 yellow comments,
+// 250 body, 241 dim, 42 user), so headings/links/etc feel native
+// to the rest of the UI.
 //
-// The dark preset has a built-in document margin of 2 chars; we pass
-// width+2 to WordWrap so the visible content area equals the
-// requested width.
+// The pinky style sets Document.Margin to 1; we pass width+1 to
+// WordWrap so the rendered content area (1 margin + content) totals
+// the requested width. The model's left-gutter ▍ sits in column 2.
 //
 // `WithChromaFormatter("terminal256")` enables syntax highlighting
 // for fenced code blocks via chroma.
@@ -57,7 +63,7 @@ func NewRenderer(width int) (*glamour.TermRenderer, error) {
 	return glamour.NewTermRenderer(
 		glamour.WithStyles(pinkyStyle()),
 		glamour.WithChromaFormatter("terminal256"),
-		glamour.WithWordWrap(width+2),
+		glamour.WithWordWrap(width+1),
 	)
 }
 
@@ -275,7 +281,10 @@ type Comment struct {
 }
 
 // Marker returns the gutter marker for a comment: "▸" for block-level
-// (CharStart < 0), "•" for inline.
+// (CharStart < 0), "•" for inline. It is consumed by the footnote
+// line renderer (the ▸/• prefix on the comment's footnote). It no
+// longer feeds the in-block gutter marker; the model layer's
+// left-gutter replaces that visual.
 func (c Comment) Marker() string {
 	if c.CharStart < 0 {
 		return "▸"

@@ -205,6 +205,52 @@ para one
 	}
 }
 
+// TestBlock_HasComment_NoComments verifies that when no comments are
+// passed, every block has HasComment=false (the zero value).
+func TestBlock_HasComment_NoComments(t *testing.T) {
+	md := `# A
+
+para one
+
+## B
+
+para two`
+	_, blocks := RenderMessageWithComments(md, 80, nil)
+	if len(blocks) == 0 {
+		t.Fatal("expected blocks")
+	}
+	for i, b := range blocks {
+		if b.HasComment {
+			t.Errorf("block %d HasComment=true with no comments", i)
+		}
+	}
+}
+
+// TestBlock_HasComment_OneCommentOnBlockN verifies that a single
+// block-level comment on block N flips blocks[N].HasComment=true and
+// leaves the others false.
+func TestBlock_HasComment_OneCommentOnBlockN(t *testing.T) {
+	md := `# A
+
+para one
+
+## B
+
+para two`
+	_, blocks := RenderMessageWithComments(md, 80, []Comment{
+		{BlockIdx: 1, CharStart: -1, CharEnd: -1, Text: "x"},
+	})
+	if len(blocks) < 2 {
+		t.Fatalf("expected at least 2 blocks, got %d", len(blocks))
+	}
+	for i, b := range blocks {
+		want := i == 1
+		if b.HasComment != want {
+			t.Errorf("block %d HasComment=%v want %v", i, b.HasComment, want)
+		}
+	}
+}
+
 // Suppress unused warnings for test helpers.
 var _ = lines
 var _ = strings.TrimSpace

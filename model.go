@@ -922,10 +922,6 @@ func helpGroupsForState(s state) [][]key.Binding {
 	return nil
 }
 
-// borderStyle is the lipgloss style for the current-block indicator.
-// Same color family as the picker header (212 accent).
-var borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-
 // placeholderStyle is the dim style for the empty-state line.
 var placeholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
 
@@ -941,9 +937,11 @@ var statusBarStyle = lipgloss.NewStyle().
 // the status line when visual mode is active. Picked so it stands
 // out against the dim status-bar background and is unambiguous about
 // the mode (visual mode has no other persistent on-screen indicator).
+// Cyan (51) matches the gutter focus indicator; magenta (212) is
+// reserved for the picker header accent.
 var visualModeStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("232")).
-	Background(lipgloss.Color("212")).
+	Background(lipgloss.Color("51")).
 	Bold(true).
 	Padding(0, 1)
 
@@ -962,7 +960,7 @@ func (m *model) refreshViewport() {
 		return
 	}
 	m.blocks = blocks
-	m.viewport.SetContent(m.injectBorder(rendered))
+	m.viewport.SetContent(m.injectGutter(rendered))
 }
 
 // focusedBlockIdx returns the block index that should carry the
@@ -976,45 +974,11 @@ func (m *model) focusedBlockIdx() int {
 	return render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
 }
 
-// injectBorder wraps the rendered output with heavy horizontal border
-// lines above and below the currently-focused block, and adds a left
-// vertical bar to each line within the block. The left bar replaces
-// glamour's 2-char dark-preset margin (visible width unchanged).
-//
-// The viewport content is rewritten line-by-line so the border sits at
-// exact line indices and the left bar covers exactly the focused
-// block's StartLine..EndLine range.
-func (m *model) injectBorder(rendered string) string {
-	idx := m.focusedBlockIdx()
-	if idx < 0 {
-		return rendered
-	}
-	lines := strings.Split(rendered, "\n")
-	heavyBorder := borderStyle.Render(strings.Repeat("━", m.width))
-	leftBar := borderStyle.Render("┃")
-	var b strings.Builder
-	for i, line := range lines {
-		if i == m.blocks[idx].StartLine {
-			b.WriteString(heavyBorder)
-			b.WriteByte('\n')
-		}
-		if i >= m.blocks[idx].StartLine && i <= m.blocks[idx].EndLine {
-			// Replace glamour's leading 2-space margin with the left
-			// vertical bar + space. If the line is already prefixed
-			// by a comment gutter marker (▸/•), keep that — the
-			// gutter conveys its own meaning.
-			if !render.HasCommentGutter(line) {
-				line = leftBar + " " + render.TrimLeadingVisible(line, 2)
-			}
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-		if i == m.blocks[idx].EndLine {
-			b.WriteString(heavyBorder)
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
+// injectGutter delegates to render.InjectGutter with the model's
+// focused-block decision. Thin wrapper so the gutter logic lives in
+// one place (render package) where it can be tested without a model.
+func (m *model) injectGutter(rendered string) string {
+	return render.InjectGutter(rendered, m.blocks, m.focusedBlockIdx())
 }
 
 
