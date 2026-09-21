@@ -72,22 +72,21 @@ func TestComposeKey_C_TypesC(t *testing.T) {
 	}
 }
 
-// TestHelpKey_TogglesHelpOverlay verifies `?` toggles the help
-// markdown in the viewport. The help markdown replaces the agent
-// message in the viewport when toggled on; another keypress
-// dismisses it and restores the message.
-func TestHelpKey_TogglesHelpOverlay(t *testing.T) {
+// TestHelpKey_TogglesShowAll verifies `?` flips the help between the
+// short (one-line) and full (multi-column) footer. The footer is
+// always visible; the toggle just switches its verbosity.
+func TestHelpKey_TogglesShowAll(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
 	m.refreshViewport()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	if !updated.(model).help {
-		t.Error("expected help=true after pressing ?")
+	if !updated.(model).help.ShowAll {
+		t.Error("expected help.ShowAll=true after pressing ?")
 	}
 	updated2, _ := updated.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	if updated2.(model).help {
-		t.Error("expected help=false after pressing ? again")
+	if updated2.(model).help.ShowAll {
+		t.Error("expected help.ShowAll=false after pressing ? again")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
 )
 
@@ -126,3 +127,46 @@ func TestSessionMsg_AssistantOnlyPollSetsLatest(t *testing.T) {
 
 // silence unused import warnings if any
 var _ tea.Model = model{}
+
+// TestSessionMsg_FlipsMsgHashClearsComments verifies that when the
+// latest message text changes, the comments slice is reset.
+func TestSessionMsg_FlipsMsgHashClearsComments(t *testing.T) {
+	src := &fakeSource{}
+	m := newIdleModel(t, src)
+	// Pre-populate with comments on a "previous" message.
+	m.latest = entry{role: roleAgent, text: "previous message"}
+	m.msgHash = commentHash("previous message")
+	m.comments = []render.Comment{
+		{BlockIdx: 0, Text: "old comment"},
+	}
+
+	// New message arrives.
+	updated, _ := m.Update(sessionMsg{entries: []entry{
+		{role: roleAgent, text: "new message"},
+	}})
+	got := updated.(model)
+	if len(got.comments) != 0 {
+		t.Errorf("comments should clear on msgHash flip; got %d", len(got.comments))
+	}
+	if got.msgHash != commentHash("new message") {
+		t.Errorf("msgHash should update to new text's hash")
+	}
+}
+
+// TestSessionMsg_SameMsgKeepsComments verifies that identical
+// messages do not clear comments.
+func TestSessionMsg_SameMsgKeepsComments(t *testing.T) {
+	src := &fakeSource{}
+	m := newIdleModel(t, src)
+	m.latest = entry{role: roleAgent, text: "same"}
+	m.msgHash = commentHash("same")
+	m.comments = []render.Comment{{BlockIdx: 0, Text: "kept"}}
+
+	updated, _ := m.Update(sessionMsg{entries: []entry{
+		{role: roleAgent, text: "same"},
+	}})
+	got := updated.(model)
+	if len(got.comments) != 1 {
+		t.Errorf("identical messages should not clear comments; got %d", len(got.comments))
+	}
+}

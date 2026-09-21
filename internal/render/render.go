@@ -9,6 +9,7 @@ package render
 import (
 	"bytes"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/yuin/goldmark"
@@ -252,3 +253,45 @@ func lineCount(s string) int {
 	}
 	return strings.Count(s, "\n")
 }
+
+// Comment is a user-authored annotation attached to a block or to a
+// byte range within a block's source.
+//
+// Anchor shape:
+//   - BlockIdx: index into the []Block slice for the block this
+//     comment annotates.
+//   - CharStart, CharEnd: byte offsets into the block's Source. A
+//     block-level comment uses CharStart == CharEnd == -1 as a
+//     sentinel for "no inline range". An inline comment uses the
+//     goldmark AST node's Lines().At(i).Start/.Stop for the
+//     anchor line and the cursor line.
+//
+// Source is the verbatim substring of the block's source for inline
+// comments (so the redirect appendix can quote the snippet without
+// re-parsing). For block-level comments Source is empty.
+type Comment struct {
+	Kind      BlockKind // kind of the block this comment annotates
+	BlockIdx  int
+	CharStart int
+	CharEnd   int
+	Source    string
+	Text      string
+	CreatedAt time.Time
+}
+
+// Marker returns the gutter marker for a comment: "▸" for block-level
+// (CharStart < 0), "•" for inline.
+func (c Comment) Marker() string {
+	if c.CharStart < 0 {
+		return "▸"
+	}
+	return "•"
+}
+
+// SelectionMode tracks the visual selection mode for the idle view.
+type SelectionMode int
+
+const (
+	SelNone SelectionMode = iota
+	SelLine
+)
