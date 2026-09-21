@@ -311,3 +311,84 @@ highlight SHALL NOT extend into the border lines.
   block's first line, the highlighted content lines, and the `─`
   border line below the block's last line, with the highlight
   covering only the content lines (not the borders)
+
+### Requirement: Visual cursor drives the border highlight
+
+While in visual line mode, the heavy horizontal border and left-bar
+indicator SHALL track the visual cursor's currently-focused block,
+not the viewport-driven `YOffset`. As the visual cursor moves
+between blocks (via `j`/`k`/`}`/`{`) the border and left bar SHALL
+move with it. The visual mode handler MUST short-circuit `j`/`k`/
+`}`/`{` before the idle-view line-movement bindings can match them;
+otherwise the visual cursor would never advance and the highlight
+would stay on whatever block `viewport.YOffset` happened to be on.
+
+#### Scenario: } moves highlight to next block
+- **WHEN** the user presses `}` in visual line mode and there is a
+  next block
+- **THEN** the heavy border and left bar move to surround the next
+  block, regardless of where `viewport.YOffset` sits
+
+#### Scenario: j leaves highlight in place within the same block
+- **WHEN** the user presses `j` in visual line mode and the visual
+  cursor stays within the same block
+- **THEN** the border stays on the same block (the cursor moved
+  within it)
+
+#### Scenario: Esc returns border to viewport-driven block
+- **WHEN** the user presses `Esc` in visual line mode
+- **THEN** the border returns to the block containing
+  `viewport.YOffset` (the normal idle-view behavior)
+
+### Requirement: Visual mode indicator chip
+
+While visual line mode is active the status line SHALL display a
+distinct "VISUAL" chip in addition to the normal status content,
+so the user has unambiguous feedback that `V` was registered. The
+chip SHALL use a high-contrast style (foreground `232`, background
+`212`, bold) so it stands out from the dim status background.
+
+#### Scenario: V toggles indicator on
+- **WHEN** the user presses `V` in idle state
+- **THEN** the status line shows the "VISUAL" indicator while
+  visual mode is active
+
+#### Scenario: Esc clears indicator
+- **WHEN** the user presses `Esc` in visual line mode
+- **THEN** the status line returns to its non-visual content (no
+  "VISUAL" chip)
+
+#### Scenario: Indicator does not appear outside visual mode
+- **WHEN** the TUI is in any non-visual state (idle, compose,
+  picker, error)
+- **THEN** the status line SHALL NOT show the "VISUAL" chip
+
+### Requirement: One-shot submit all comments
+
+Pressing `s` in idle state SHALL submit every accumulated comment
+as a single redirect through the existing inject pipeline, without
+requiring the user to enter compose mode or type any text. The
+redirect payload SHALL be exactly the comments appendix (no leading
+user text). On successful send the comment slice SHALL be cleared;
+on inject failure the comments SHALL be kept so the user can retry
+and the error SHALL be surfaced via the same `[send failed: ...]`
+placeholder the compose path uses.
+
+#### Scenario: s submits all accumulated comments
+- **WHEN** the user presses `s` in idle state and there is at
+  least one comment
+- **THEN** the inject pipeline receives a payload equal to
+  `render.FormatCommentsAppendix(comments, blocks)`, the comment
+  slice is cleared, and no compose-mode interaction is required
+
+#### Scenario: s with no comments is a no-op
+- **WHEN** the user presses `s` in idle state and the comment
+  slice is empty
+- **THEN** no inject call is made and no state changes
+
+#### Scenario: send failure keeps comments
+- **WHEN** the user presses `s` and the inject call returns an
+  error
+- **THEN** the comment slice is NOT cleared and the error is
+  surfaced via the same `[send failed: ...]` placeholder the
+  compose path uses
