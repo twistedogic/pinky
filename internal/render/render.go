@@ -108,16 +108,11 @@ func renderBlocks(md string, width int) (string, []Block) {
 }
 
 // RenderMessage renders md block-by-block and returns the concatenated
-// rendered string plus the matching block index.
+// rendered string plus the matching block index. The []Block return
+// value covers callers that only need navigation too — splitting out
+// a BuildBlockIndex helper would just duplicate the parse work.
 func RenderMessage(md string, width int) (string, []Block) {
 	return renderBlocks(md, width)
-}
-
-// BuildBlockIndex returns just the block index for md (no rendered
-// string). Provided for callers that only need navigation.
-func BuildBlockIndex(md string, width int) []Block {
-	_, blocks := renderBlocks(md, width)
-	return blocks
 }
 
 // CurrentBlockIdx returns the index of the block containing the given

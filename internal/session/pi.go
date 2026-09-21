@@ -148,7 +148,7 @@ func (s *piSource) NewMessages() ([]Message, error) {
 
 	var out []Message
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	sc.Buffer(make([]byte, 64*1024), scannerMaxLine)
 	for sc.Scan() {
 		var raw piEntry
 		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {

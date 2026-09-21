@@ -1,6 +1,11 @@
 package render
 
-import "strings"
+import (
+	"cmp"
+	"slices"
+	"strconv"
+	"strings"
+)
 
 // FormatCommentsAppendix builds the redirect appendix string for a
 // set of comments. Empty comments slice → empty string.
@@ -22,16 +27,13 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 		return ""
 	}
 	// Sort by CreatedAt ascending so the appendix reads chronologically.
-	sorted := make([]Comment, len(comments))
-	copy(sorted, comments)
-	for i := 1; i < len(sorted); i++ {
-		for j := i; j > 0 && sorted[j-1].CreatedAt.After(sorted[j].CreatedAt); j-- {
-			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
-		}
-	}
+	sorted := slices.Clone(comments)
+	slices.SortFunc(sorted, func(a, b Comment) int {
+		return cmp.Compare(a.CreatedAt.UnixNano(), b.CreatedAt.UnixNano())
+	})
 	var b strings.Builder
 	b.WriteString("\n\n---\n")
-	b.WriteString(itoa(len(sorted)))
+	b.WriteString(strconv.Itoa(len(sorted)))
 	b.WriteString(" comments:\n")
 	for _, c := range sorted {
 		marker := "block"
@@ -56,13 +58,13 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 		if c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
 			if c.CharStart < 0 {
 				b.WriteString(" (lines ")
-				b.WriteString(itoa(blocks[c.BlockIdx].StartLine))
+				b.WriteString(strconv.Itoa(blocks[c.BlockIdx].StartLine))
 				b.WriteString("-")
-				b.WriteString(itoa(blocks[c.BlockIdx].EndLine))
+				b.WriteString(strconv.Itoa(blocks[c.BlockIdx].EndLine))
 				b.WriteString(")")
 			} else {
 				b.WriteString(" (line ")
-				b.WriteString(itoa(blocks[c.BlockIdx].StartLine))
+				b.WriteString(strconv.Itoa(blocks[c.BlockIdx].StartLine))
 				b.WriteString(")")
 			}
 		}
@@ -71,29 +73,4 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
-}
-
-// itoa avoids importing strconv in this hot path; small int
-// formatting is fine without it.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

@@ -2,6 +2,8 @@ package render
 
 import (
 	"strings"
+	"cmp"
+	"slices"
 )
 
 // footnote is one comment's footnote line, ready to be injected
@@ -26,7 +28,7 @@ type footnote struct {
 func tintLine(line string, width int) string {
 	const bg = "[48;5;237m"
 	const reset = "[0m"
-	visW := visibleWidthOf(line)
+	visW := VisibleWidth(line)
 	pad := width - visW
 	if pad < 0 {
 		pad = 0
@@ -34,9 +36,11 @@ func tintLine(line string, width int) string {
 	return bg + line + strings.Repeat(" ", pad) + reset
 }
 
-// visibleWidthOf counts non-ANSI runes; mirrors model.visibleWidth
-// (kept private to this package to avoid exposing it externally).
-func visibleWidthOf(s string) int {
+// VisibleWidth counts non-ANSI runes in s. Used for status-bar
+// padding so the rendered bar fills the terminal even when its bg
+// style would otherwise break lipgloss.Width. Exported because the
+// model package needs to apply the same padding.
+func VisibleWidth(s string) int {
 	n := 0
 	inEscape := false
 	for _, r := range s {
@@ -166,13 +170,11 @@ func injectFootnotes(rendered string, footnotes []footnote) string {
 	}
 	lines := strings.Split(rendered, "\n")
 	// Sort footnotes by lineIdx ascending so earlier insertions don't
-	// shift later indices. Stable sort keeps declaration order for
-	// ties.
-	for i := 1; i < len(footnotes); i++ {
-		for j := i; j > 0 && footnotes[j-1].lineIdx > footnotes[j].lineIdx; j-- {
-			footnotes[j-1], footnotes[j] = footnotes[j], footnotes[j-1]
-		}
-	}
+	// shift later indices. slices.SortFunc is stable, so declaration
+	// order is preserved for ties.
+	slices.SortFunc(footnotes, func(a, b footnote) int {
+		return cmp.Compare(a.lineIdx, b.lineIdx)
+	})
 	// Build (insertion index → list of footnote lines to insert).
 	// Slice-valued map entries accumulate so multiple footnotes at
 	// the same insertion point stack in declaration order.
@@ -217,15 +219,52 @@ func injectFootnotes(rendered string, footnotes []footnote) string {
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
-
-// OverlayComments applies highlight + footnote overlays to an
-// already-rendered string. Exposed for testing and as a building
-// block. width is the terminal width so lipgloss can extend the
-// background tint across the full line.
-func OverlayComments(rendered string, blocks []Block, comments []Comment, width int) string {
-	if len(comments) == 0 {
-		return rendered
+// TrimLeadingVisible strips n visible (non-ANSI) characters from
+// the start of s. Exposed so the model's border injection can reuse
+// it instead of keeping its own copy.
+func TrimLeadingVisible(s string, n int) string {
+	var b strings.Builder
+	skipped := 0
+	inEscape := false
+	for _, r := range s {
+		if r == 0x1b {
+			inEscape = true
+			b.WriteRune(r)
+			continue
+		}
+		if inEscape {
+			b.WriteRune(r)
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		if skipped < n {
+			skipped++
+			continue
+		}
+		b.WriteRune(r)
 	}
-	tinted := applyHighlights(rendered, blocks, comments, width)
-	return injectFootnotes(tinted, footnoteLines(blocks, comments))
+	return b.String()
+}
+
+// HasCommentGutter reports whether s starts with the gutter marker
+// (▸ or •) that the comment renderer prepends to the first line of
+// a commented block. Used so the left bar doesn't clobber the marker.
+func HasCommentGutter(s string) bool {
+	inEscape := false
+	for _, r := range s {
+		if r == 0x1b {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		return r == '\u25B8' || r == '\u2022'
+	}
+	return false
 }

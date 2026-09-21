@@ -11,7 +11,7 @@ func TestBuildBlockIndex_MultiBlockMessage(t *testing.T) {
 A short paragraph.
 
 ` + "```go\nfunc main() {}\n```"
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	if len(blocks) != 3 {
 		t.Fatalf("len(blocks)=%d want 3 (got %+v)", len(blocks), blocks)
 	}
@@ -29,7 +29,7 @@ func TestBuildBlockIndex_ListItemsIndividual(t *testing.T) {
 - gamma
 - delta
 - epsilon`
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	if len(blocks) != 5 {
 		t.Fatalf("len(blocks)=%d want 5 (got %+v)", len(blocks), blocks)
 	}
@@ -46,7 +46,7 @@ func TestBuildBlockIndex_EmptyParagraphSkipped(t *testing.T) {
 First paragraph.
 
 Second paragraph.`
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	// Expected: heading, paragraph (first), paragraph (second).
 	// Empty paragraph between title and first paragraph is dropped.
 	if len(blocks) != 3 {
@@ -69,7 +69,7 @@ para one
 ## B
 
 para two`
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	for i := 0; i < len(blocks)-1; i++ {
 		if blocks[i].EndLine+1 != blocks[i+1].StartLine {
 			t.Errorf("blocks[%d] ends at %d, blocks[%d] starts at %d (not contiguous)",
@@ -81,7 +81,7 @@ para two`
 func TestBuildBlockIndex_StartAtZero(t *testing.T) {
 	md := `first block
 second block`
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	if len(blocks) == 0 {
 		t.Fatal("expected blocks")
 	}
@@ -93,7 +93,7 @@ second block`
 // Helpers for navigation tests below.
 func mustBuild(t *testing.T, md string, width int) []Block {
 	t.Helper()
-	return BuildBlockIndex(md, width)
+	_, b := RenderMessage(md, width); return b
 }
 
 func lines(n int) []string {

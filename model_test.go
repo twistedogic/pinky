@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/twistedogic/pinky/internal/render"
+	"github.com/twistedogic/pinky/internal/session"
 )
 
 // initCommentTAForTest mirrors m.initCommentComposer() so tests
@@ -27,7 +28,7 @@ func initCommentTAForTest(m *model) {
 func TestIdleKey_M_EntersComposer(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 
@@ -45,7 +46,7 @@ func TestIdleKey_M_EntersComposer(t *testing.T) {
 func TestIdleKey_V_EntersVisual(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
@@ -61,7 +62,7 @@ func TestIdleKey_V_EntersVisual(t *testing.T) {
 func TestIdleKey_D_NoCommentIsNoop(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
@@ -77,7 +78,7 @@ func TestIdleKey_D_NoCommentIsNoop(t *testing.T) {
 func TestIdleKey_D_RemovesMostRecentComment(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 	m.comments = []render.Comment{
 		{BlockIdx: 0, CharStart: -1, Text: "x", CreatedAt: time.Now()},
@@ -96,7 +97,7 @@ func TestIdleKey_D_RemovesMostRecentComment(t *testing.T) {
 func TestIdleKey_NN_WrapsAround(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# A\n\np1\n\n## B\n\np2"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# A\n\np1\n\n## B\n\np2"}
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 	m.comments = []render.Comment{
@@ -127,7 +128,7 @@ func TestIdleKey_NN_WrapsAround(t *testing.T) {
 func TestVisual_EscExitsAndClearsState(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
 	// Enter visual.

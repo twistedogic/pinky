@@ -25,14 +25,7 @@ const (
 
 	placeholderText = "waiting for agent…"
 
-	roleAgent = "agent"
-	roleUser  = "user"
 )
-
-type entry struct {
-	role string
-	text string
-}
 
 type state int
 
@@ -45,7 +38,7 @@ const (
 )
 
 type sessionMsg struct {
-	entries []entry
+	entries []session.Message
 	err     error
 }
 
@@ -78,7 +71,7 @@ type model struct {
 
 	// Latest-message view state. pinky always renders the most recent
 	// assistant message; older messages are not displayed.
-	latest entry
+	latest session.Message
 	blocks []render.Block
 
 	viewport viewport.Model
@@ -96,7 +89,7 @@ type model struct {
 	// when not in visual mode.
 	visual visualState
 
-	// msgHash is a short fingerprint of latest.text; flips when the
+	// msgHash is a short fingerprint of latest.Text; flips when the
 	// assistant message content changes, which triggers a comment reset.
 	msgHash string
 
@@ -138,27 +131,6 @@ func commentHash(text string) string {
 	h := fnv.New32a()
 	h.Write([]byte(text))
 	return fmt.Sprintf("%08x", h.Sum32())
-}
-
-// msgHashOf returns commentHash(m.latest.text). Wrapped as a method so
-// the call site stays symmetric with the field.
-func (m *model) msgHashOf() string { return commentHash(m.latest.text) }
-
-// currentBlockComments returns the comments attached to the
-// currently-focused block. The currently-focused block is derived
-// from m.viewport.YOffset.
-func (m *model) currentBlockComments() []render.Comment {
-	idx := render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-	if idx < 0 {
-		return nil
-	}
-	var out []render.Comment
-	for _, c := range m.comments {
-		if c.BlockIdx == idx {
-			out = append(out, c)
-		}
-	}
-	return out
 }
 
 // mostRecentComment returns the index (into m.comments) of the most
@@ -255,25 +227,11 @@ func (m *model) viewportSize() (int, int) {
 	return w, h
 }
 
-// attach opens a session source + history for the given pane and
-// transitions to idle state. History is opened for append-only writing
-// but is NOT loaded back into the view (the view starts fresh).
-//
-// Always seeds the viewport via refreshViewport so the placeholder
-// (or the latest message if one was already known) renders immediately
-// — same behavior whether the user picked the session from the picker
-// or jumped straight to it via --target.
-func (m *model) attach(pane string) error {
-	src, err := session.Open(pane)
-	if err != nil {
-		return err
-	}
-	hist, err := history.Open(pane)
-	if err != nil {
-		_ = src.Close()
-		return fmt.Errorf("open history: %w", err)
-	}
-
+// idle is the shared tail of attach/attachWithFile: the view setup
+// (placeholder seed, textareas, comment slice, msgHash) once source +
+// history are resolved. ponytail: pull the shared 25 lines out so the
+// two entry points only have to source/resolve before calling.
+func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	ta := textarea.New()
 	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
 	ta.ShowLineNumbers = false
@@ -291,39 +249,37 @@ func (m *model) attach(pane string) error {
 	m.refreshViewport()
 	m.initCommentComposer()
 	m.comments = nil
-	m.msgHash = commentHash(m.latest.text)
+	m.msgHash = commentHash(m.latest.Text)
+}
+
+// attach opens a session source + history for the given pane.
+// Always seeds the viewport via refreshViewport so the placeholder
+// renders immediately — same whether the user used the picker or
+// --target.
+func (m *model) attach(pane string) error {
+	src, err := session.Open(pane)
+	if err != nil {
+		return err
+	}
+	hist, err := history.Open(pane)
+	if err != nil {
+		_ = src.Close()
+		return fmt.Errorf("open history: %w", err)
+	}
+	m.idle(src, hist, pane)
 	return nil
 }
 
 // attachWithFile is the --session-file escape hatch: skip pane
-// discovery and use the given JSONL path directly. Used when the
-// auto-discovery (PI_SESSION_FILE / lsof) can't find the file.
-// ponytail: no pane → no inject.Send target; compose still works
-// locally but the redirect has nowhere to go.
+// discovery and use the given JSONL path directly. No history, no
+// pane → compose still works locally but the redirect has nowhere
+// to go.
 func (m *model) attachWithFile(path string) error {
 	src, err := session.OpenFile(path)
 	if err != nil {
 		return err
 	}
-
-	ta := textarea.New()
-	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
-	ta.ShowLineNumbers = false
-	ta.CharLimit = 0
-	ta.SetHeight(composeHeight)
-
-	w, h := m.viewportSize()
-
-	m.pane = "(explicit)"
-	m.src = src
-	m.hist = nil
-	m.viewport = viewport.New(w, h)
-	m.textarea = ta
-	m.state = stateIdle
-	m.refreshViewport()
-	m.initCommentComposer()
-	m.comments = nil
-	m.msgHash = commentHash(m.latest.text)
+	m.idle(src, nil, "(explicit)")
 	return nil
 }
 
@@ -347,13 +303,13 @@ func pollCmd(src session.Source) tea.Cmd {
 		if err != nil {
 			return sessionMsg{err: err}
 		}
-		var entries []entry
+		var entries []session.Message
 		for _, m := range msgs {
-			role := roleAgent
+			role := session.RoleAssistant
 			if m.Role == session.RoleUser {
-				role = roleUser
+				role = session.RoleUser
 			}
-			entries = append(entries, entry{role: role, text: m.Text})
+			entries = append(entries, session.Message{Role: role, Text: m.Text})
 		}
 		return sessionMsg{entries: entries}
 	})
@@ -383,14 +339,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Find the latest assistant message in this poll. A user redirect
 		// arriving after the agent's last reply should NOT replace the
 		// view — we want the agent's most recent text, not the user's own.
-		var last *entry
+		var last *session.Message
 		for i := range msg.entries {
-			if msg.entries[i].role == roleAgent {
+			if msg.entries[i].Role == session.RoleAssistant {
 				last = &msg.entries[i]
 			}
 		}
 		if last != nil {
-			h := commentHash(last.text)
+			h := commentHash(last.Text)
 			if h != m.msgHash {
 				m.comments = nil
 				m.msgHash = h
@@ -398,7 +354,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.latest = *last
 		}
 		if m.hist != nil && last != nil {
-			_ = m.hist.Append(last.role, last.text)
+			_ = m.hist.Append(string(last.Role), last.Text)
 		}
 		m.streaming = true
 		m.refreshViewport()
@@ -474,12 +430,11 @@ func (m *model) submitAllComments() {
 	}
 	text := render.FormatCommentsAppendix(m.comments, m.blocks)
 	if m.hist != nil {
-		_ = m.hist.Append(roleUser, text)
+		_ = m.hist.Append(string(session.RoleUser), text)
 	}
 	if err := sendToPane(m.pane, text); err != nil {
-		m.latest = entry{
-			role: roleUser,
-			text: "[send failed: " + err.Error() + "]",
+		m.latest = session.Message{
+			Role: session.RoleUser, Text: "[send failed: " + err.Error() + "]",
 		}
 		m.refreshViewport()
 		m.viewport.GotoBottom()
@@ -788,14 +743,13 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			text += render.FormatCommentsAppendix(m.comments, m.blocks)
 		}
 		if m.hist != nil {
-			_ = m.hist.Append(roleUser, text)
+			_ = m.hist.Append(string(session.RoleUser), text)
 		}
-		if err := inject.Send(m.pane, text); err != nil {
+		if err := sendToPane(m.pane, text); err != nil {
 			// ponytail: surface a transient placeholder rather than
 			// permanently mutating view state; revisit if it bites.
-			m.latest = entry{
-				role: roleUser,
-				text: "[send failed: " + err.Error() + "]",
+			m.latest = session.Message{
+				Role: session.RoleUser, Text: "[send failed: " + err.Error() + "]",
 			}
 			m.refreshViewport()
 			m.viewport.GotoBottom()
@@ -922,97 +876,47 @@ func (m model) ShortHelp() []key.Binding {
 // ordering the short view picks from, so adding a binding to a group
 // here also surfaces it in the long view.
 func (m model) FullHelp() [][]key.Binding {
-	groups := helpGroupsForState(m.state)
-	out := make([][]key.Binding, 0, len(groups))
-	for _, g := range groups {
-		if len(g.bindings) > 0 {
-			out = append(out, g.bindings)
-		}
-	}
-	return out
+	return helpGroupsForState(m.state)
 }
 
-// helpGroup is one column in the expanded help view. title is unused
-// at runtime — the column key list is rendered directly — but kept
-// around in case we want labeled columns later.
-type helpGroup struct {
-	title    string
-	bindings []key.Binding
-}
-
-func helpGroupsForState(s state) []helpGroup {
+// helpGroups returns the per-state help binding groups for the
+// expanded (full) help view. The model passes this list straight
+// through FullHelp() — no per-group wrapper struct is needed since
+// the column title was unused (kept only as "in case we want labels
+// later", per the original comment).
+func helpGroupsForState(s state) [][]key.Binding {
 	switch s {
 	case statePicking:
-		return []helpGroup{
-			{title: "navigation", bindings: []key.Binding{
-				defaultKeyMap.Up, defaultKeyMap.Down,
-			}},
-			{title: "select", bindings: []key.Binding{
-				defaultKeyMap.Pick,
-			}},
-			{title: "exit", bindings: []key.Binding{
-				defaultKeyMap.QuitPick, defaultKeyMap.Help,
-			}},
+		return [][]key.Binding{
+			{defaultKeyMap.Up, defaultKeyMap.Down},
+			{defaultKeyMap.Pick},
+			{defaultKeyMap.QuitPick, defaultKeyMap.Help},
 		}
 	case stateIdle:
-		return []helpGroup{
-			{title: "navigation", bindings: []key.Binding{
-				defaultKeyMap.LineDown, defaultKeyMap.LineUp,
-				defaultKeyMap.NextBlock, defaultKeyMap.PrevBlock,
-				defaultKeyMap.BottomLine,
-			}},
-			{title: "mark", bindings: []key.Binding{
-				defaultKeyMap.Mark, defaultKeyMap.Visual,
-			}},
-			{title: "visual (after V)", bindings: []key.Binding{
-				defaultKeyMap.VisualDown, defaultKeyMap.VisualUp,
-				defaultKeyMap.VisualNextBlock, defaultKeyMap.VisualPrevBlock,
-				defaultKeyMap.VisualOpen, defaultKeyMap.VisualExit,
-			}},
-			{title: "comments", bindings: []key.Binding{
-				defaultKeyMap.EditComment, defaultKeyMap.DeleteComment,
-				defaultKeyMap.NextComment, defaultKeyMap.PrevComment,
-				defaultKeyMap.SubmitComments,
-			}},
-			{title: "compose", bindings: []key.Binding{
-				defaultKeyMap.Compose,
-			}},
-			{title: "session", bindings: []key.Binding{
-				defaultKeyMap.Refresh,
-			}},
-			{title: "exit", bindings: []key.Binding{
-				defaultKeyMap.QuitIdle, defaultKeyMap.Help,
-			}},
+		return [][]key.Binding{
+			{defaultKeyMap.LineDown, defaultKeyMap.LineUp, defaultKeyMap.NextBlock, defaultKeyMap.PrevBlock, defaultKeyMap.BottomLine},
+			{defaultKeyMap.Mark, defaultKeyMap.Visual},
+			{defaultKeyMap.VisualDown, defaultKeyMap.VisualUp, defaultKeyMap.VisualNextBlock, defaultKeyMap.VisualPrevBlock, defaultKeyMap.VisualOpen, defaultKeyMap.VisualExit},
+			{defaultKeyMap.EditComment, defaultKeyMap.DeleteComment, defaultKeyMap.NextComment, defaultKeyMap.PrevComment, defaultKeyMap.SubmitComments},
+			{defaultKeyMap.Compose},
+			{defaultKeyMap.Refresh},
+			{defaultKeyMap.QuitIdle, defaultKeyMap.Help},
 		}
 	case stateCompose:
-		return []helpGroup{
-			{title: "send", bindings: []key.Binding{
-				defaultKeyMap.Send,
-			}},
-			{title: "input", bindings: []key.Binding{
-				defaultKeyMap.Newline,
-			}},
-			{title: "include", bindings: []key.Binding{
-				defaultKeyMap.IncludeComments,
-			}},
-			{title: "cancel", bindings: []key.Binding{
-				defaultKeyMap.Cancel, defaultKeyMap.Help,
-			}},
+		return [][]key.Binding{
+			{defaultKeyMap.Send},
+			{defaultKeyMap.Newline},
+			{defaultKeyMap.IncludeComments},
+			{defaultKeyMap.Cancel, defaultKeyMap.Help},
 		}
 	case stateCommentComposer:
-		return []helpGroup{
-			{title: "save", bindings: []key.Binding{
-				defaultKeyMap.Send,
-			}},
-			{title: "cancel", bindings: []key.Binding{
-				defaultKeyMap.Cancel,
-			}},
+		return [][]key.Binding{
+			{defaultKeyMap.Send},
+			{defaultKeyMap.Cancel},
 		}
 	case stateError:
-		return []helpGroup{
-			{title: "dismiss", bindings: []key.Binding{
-				defaultKeyMap.QuitError, defaultKeyMap.Help,
-			}},
+		return [][]key.Binding{
+			{defaultKeyMap.QuitError, defaultKeyMap.Help},
 		}
 	}
 	return nil
@@ -1044,17 +948,17 @@ var visualModeStyle = lipgloss.NewStyle().
 	Padding(0, 1)
 
 func (m *model) refreshViewport() {
-	if m.latest.text == "" {
+	if m.latest.Text == "" {
 		m.blocks = nil
 		m.viewport.SetContent(placeholderStyle.Render(placeholderText))
 		return
 	}
 	// Ponytail: RenderMessageWithComments is a strict superset; for
 	// zero comments it returns the same output as RenderMessage.
-	rendered, blocks := render.RenderMessageWithComments(m.latest.text, m.width, m.comments)
+	rendered, blocks := render.RenderMessageWithComments(m.latest.Text, m.width, m.comments)
 	if rendered == "" {
 		// Renderer rejected this width (very narrow terminal): plain-text fallback.
-		m.viewport.SetContent(m.latest.text)
+		m.viewport.SetContent(m.latest.Text)
 		return
 	}
 	m.blocks = blocks
@@ -1099,8 +1003,8 @@ func (m *model) injectBorder(rendered string) string {
 			// vertical bar + space. If the line is already prefixed
 			// by a comment gutter marker (▸/•), keep that — the
 			// gutter conveys its own meaning.
-			if !hasCommentGutter(line) {
-				line = leftBar + " " + trimLeadingVisible(line, 2)
+			if !render.HasCommentGutter(line) {
+				line = leftBar + " " + render.TrimLeadingVisible(line, 2)
 			}
 		}
 		b.WriteString(line)
@@ -1113,55 +1017,6 @@ func (m *model) injectBorder(rendered string) string {
 	return b.String()
 }
 
-// trimLeadingVisible strips n visible (non-ANSI) characters from the
-// start of s. Used to remove glamour's 2-char margin before
-// prepending the block's left vertical bar.
-func trimLeadingVisible(s string, n int) string {
-	var b strings.Builder
-	skipped := 0
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			b.WriteRune(r)
-			continue
-		}
-		if inEscape {
-			b.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		if skipped < n {
-			skipped++
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// hasCommentGutter reports whether s starts with the gutter marker
-// (▸ or •) that the comment renderer prepends to the first line of a
-// commented block. Used so the left bar doesn't clobber the marker.
-func hasCommentGutter(s string) bool {
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		return r == '▸' || r == '•'
-	}
-	return false
-}
 
 func (m model) View() string {
 	// Help footer is rendered for every state; `?` flips it between
@@ -1201,28 +1056,6 @@ func (m model) View() string {
 	}
 }
 
-// visibleWidth returns the visible (ANSI-stripped) width of s. Used
-// to pad lines to the terminal width; lipgloss.Width is off-by-one
-// when styling adds background-color padding (e.g. statusBarStyle).
-func visibleWidth(s string) int {
-	n := 0
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		n++
-	}
-	return n
-}
-
 // fillWidth pads every line of s to m.width so the rendered output
 // spans the full terminal. Before WindowSizeMsg fires, m.width is 0
 // and we return s unchanged.
@@ -1236,7 +1069,7 @@ func (m model) fillWidth(s string) string {
 			b.WriteByte('\n')
 		}
 		b.WriteString(line)
-		if pad := m.width - visibleWidth(line); pad > 0 {
+		if pad := m.width - render.VisibleWidth(line); pad > 0 {
 			b.WriteString(strings.Repeat(" ", pad))
 		}
 	}
@@ -1306,7 +1139,7 @@ func (m model) statusLine() string {
 	if m.width <= 0 {
 		return rendered
 	}
-	if pad := m.width - visibleWidth(rendered); pad > 0 {
+	if pad := m.width - render.VisibleWidth(rendered); pad > 0 {
 		rendered += strings.Repeat(" ", pad)
 	}
 	return rendered

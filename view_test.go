@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/twistedogic/pinky/internal/render"
 	"strings"
 	"testing"
 
@@ -44,10 +45,8 @@ func TestView_PadsStatusLineToFullWidth(t *testing.T) {
 }
 
 // visualLen returns the visible (rune) count of s, ignoring ANSI.
-// Defined as a thin wrapper around the package-level visibleWidth so
-// the test reads naturally.
 func visualLen(s string) int {
-	return visibleWidth(s)
+	return render.VisibleWidth(s)
 }
 
 // silence unused import warning

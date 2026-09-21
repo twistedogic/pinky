@@ -1,10 +1,11 @@
 package session
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -41,7 +42,7 @@ func newestJSONL(dir string) (string, error) {
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no .jsonl files in %s", dir)
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(candidates)))
+	slices.SortFunc(candidates, func(a, b string) int { return cmp.Compare(b, a) })
 	return candidates[0], nil
 }
 

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/twistedogic/pinky/internal/render"
+	"github.com/twistedogic/pinky/internal/session"
 )
 
 // TestHelp_AlwaysVisibleInIdleView: the help footer is part of every
@@ -17,7 +18,7 @@ import (
 func TestHelp_AlwaysVisibleInIdleView(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello\n\nbody"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
 	view := m.View()
@@ -99,7 +100,7 @@ func TestHelp_QuestionMarkTogglesFullHelp(t *testing.T) {
 func TestVisual_StatusLineIndicatesActive(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello"}
 	m.refreshViewport()
 	m.reflow()
 
@@ -124,7 +125,7 @@ func TestVisual_StatusLineIndicatesActive(t *testing.T) {
 func TestSubmitComments_ClearsOnSuccess(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# title\n\nbody one"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# title\n\nbody one"}
 	m.refreshViewport()
 
 	m.comments = []render.Comment{
@@ -161,7 +162,7 @@ func TestSubmitComments_ClearsOnSuccess(t *testing.T) {
 func TestSubmitComments_NoCommentsNoop(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
-	m.latest = entry{role: roleAgent, text: "# Hello"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello"}
 	m.refreshViewport()
 
 	called := false
@@ -191,7 +192,7 @@ func TestVisual_BracketMovesHighlight(t *testing.T) {
 	m.state = stateIdle
 	// Three short blocks: two single-line headings with a paragraph
 	// between, so } has somewhere obvious to land.
-	m.latest = entry{role: roleAgent, text: "# alpha\n\nbody one\n\n## beta\n\nbody two"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# alpha\n\nbody one\n\n## beta\n\nbody two"}
 	m.refreshViewport()
 	m.reflow()
 	if len(m.blocks) < 3 {
@@ -246,7 +247,7 @@ func TestVisual_JMovesCursorWithinBlock(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateIdle
 	// A block long enough that j has somewhere to go without leaving it.
-	m.latest = entry{role: roleAgent, text: "# title\n\nline one\nline two\nline three"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# title\n\nline one\nline two\nline three"}
 	m.refreshViewport()
 	m.reflow()
 

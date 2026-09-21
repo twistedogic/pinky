@@ -2,7 +2,6 @@
 package tmux
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,19 +12,27 @@ import (
 var ErrTmuxNotRunning = errors.New("tmux not running: $TMUX is unset")
 
 // Run executes tmux with the given args and returns trimmed stdout.
-func Run(args ...string) (string, error) {
-	out, err := exec.Command("tmux", args...).Output()
+// If stdin is non-empty it is piped to the command.
+func Run(stdin string, args ...string) (string, error) {
+	cmd := exec.Command("tmux", args...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	out, err := cmd.Output()
 	return strings.TrimRight(string(out), "\n"), err
 }
 
-// RunStdin executes tmux with the given args, feeding stdin from s.
-func RunStdin(s string, args ...string) error {
+// RunStderr executes tmux with the given args (and optional stdin),
+// surfacing stderr on failure. Use for commands where only the
+// exit status and stderr matter (e.g. load-buffer).
+func RunStderr(stdin string, args ...string) error {
 	cmd := exec.Command("tmux", args...)
-	cmd.Stdin = strings.NewReader(s)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return errors.New(strings.TrimSpace(stderr.String()))
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		return errors.New(strings.TrimSpace(string(buf)))
 	}
 	return nil
 }
@@ -40,7 +47,7 @@ func RequireServer() error {
 
 // PaneExists checks whether the given tmux pane id resolves.
 func PaneExists(pane string) bool {
-	out, err := Run("display-message", "-t", pane, "-p", "#{pane_id}")
+	out, err := Run("", "display-message", "-t", pane, "-p", "#{pane_id}")
 	if err != nil || out == "" {
 		return false
 	}

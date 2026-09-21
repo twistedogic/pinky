@@ -55,27 +55,27 @@ func TestSessionMsg_PrefersAssistantOverUser(t *testing.T) {
 		},
 	}
 	m := newIdleModel(t, src)
-	msg := sessionMsg{entries: []entry{
-		{role: roleAgent, text: "agent response"},
-		{role: roleUser, text: "user redirect"},
+	msg := sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: "agent response"},
+		{Role: session.RoleUser, Text: "user redirect"},
 	}}
 	updated, _ := m.Update(msg)
 	got := updated.(model)
-	if got.latest.text != "agent response" {
-		t.Errorf("latest.text = %q, want %q", got.latest.text, "agent response")
+	if got.latest.Text != "agent response" {
+		t.Errorf("latest.Text = %q, want %q", got.latest.Text, "agent response")
 	}
-	if got.latest.role != roleAgent {
-		t.Errorf("latest.role = %q, want %q", got.latest.role, roleAgent)
+	if got.latest.Role != session.RoleAssistant {
+		t.Errorf("latest.Role = %q, want %q", got.latest.Role, session.RoleAssistant)
 	}
 }
 
 func TestSessionMsg_EmptyPollKeepsLatest(t *testing.T) {
 	m := newIdleModel(t, &fakeSource{})
-	m.latest = entry{role: roleAgent, text: "previous"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "previous"}
 	updated, _ := m.Update(sessionMsg{entries: nil})
 	got := updated.(model)
-	if got.latest.text != "previous" {
-		t.Errorf("empty poll should not clear latest; got %q want %q", got.latest.text, "previous")
+	if got.latest.Text != "previous" {
+		t.Errorf("empty poll should not clear latest; got %q want %q", got.latest.Text, "previous")
 	}
 }
 
@@ -93,16 +93,16 @@ func TestSessionMsg_FirstMessageRendersIntoViewport(t *testing.T) {
 	}
 
 	// After sessionMsg, viewport should contain rendered content.
-	updated, _ := m.Update(sessionMsg{entries: []entry{
-		{role: roleAgent, text: "# Title\n\nbody"},
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: "# Title\n\nbody"},
 	}})
 	got := updated.(model)
 	view = got.View()
 	if strings.Contains(view, "waiting for agent") {
 		t.Errorf("placeholder should be gone after message; got: %q", view)
 	}
-	if got.latest.text == "" {
-		t.Errorf("latest.text should be set after message")
+	if got.latest.Text == "" {
+		t.Errorf("latest.Text should be set after message")
 	}
 }
 
@@ -115,13 +115,13 @@ func TestSessionMsg_AssistantOnlyPollSetsLatest(t *testing.T) {
 		},
 	}
 	m := newIdleModel(t, src)
-	m.latest = entry{role: roleAgent, text: "existing"}
-	updated, _ := m.Update(sessionMsg{entries: []entry{
-		{role: roleUser, text: "user only"},
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "existing"}
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleUser, Text: "user only"},
 	}})
 	got := updated.(model)
-	if got.latest.text != "existing" {
-		t.Errorf("user-only poll should not change latest; got %q want %q", got.latest.text, "existing")
+	if got.latest.Text != "existing" {
+		t.Errorf("user-only poll should not change latest; got %q want %q", got.latest.Text, "existing")
 	}
 }
 
@@ -134,15 +134,15 @@ func TestSessionMsg_FlipsMsgHashClearsComments(t *testing.T) {
 	src := &fakeSource{}
 	m := newIdleModel(t, src)
 	// Pre-populate with comments on a "previous" message.
-	m.latest = entry{role: roleAgent, text: "previous message"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "previous message"}
 	m.msgHash = commentHash("previous message")
 	m.comments = []render.Comment{
 		{BlockIdx: 0, Text: "old comment"},
 	}
 
 	// New message arrives.
-	updated, _ := m.Update(sessionMsg{entries: []entry{
-		{role: roleAgent, text: "new message"},
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: "new message"},
 	}})
 	got := updated.(model)
 	if len(got.comments) != 0 {
@@ -158,12 +158,12 @@ func TestSessionMsg_FlipsMsgHashClearsComments(t *testing.T) {
 func TestSessionMsg_SameMsgKeepsComments(t *testing.T) {
 	src := &fakeSource{}
 	m := newIdleModel(t, src)
-	m.latest = entry{role: roleAgent, text: "same"}
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "same"}
 	m.msgHash = commentHash("same")
 	m.comments = []render.Comment{{BlockIdx: 0, Text: "kept"}}
 
-	updated, _ := m.Update(sessionMsg{entries: []entry{
-		{role: roleAgent, text: "same"},
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: "same"},
 	}})
 	got := updated.(model)
 	if len(got.comments) != 1 {

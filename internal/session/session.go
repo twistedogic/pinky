@@ -33,6 +33,12 @@ type Message struct {
 	Ts   time.Time
 }
 
+// scannerMaxLine caps agent JSONL line size at 16 MiB. The
+// 16 MiB covers any plausible single assistant output and avoids
+// bufio.Scanner's default 64 KiB which trips on a long streamed
+// message.
+const scannerMaxLine = 16 * 1024 * 1024
+
 // Source reads new messages from an agent session. Implementations
 // track their own read offset internally; NewMessages returns only
 // content appended since the previous call (or since Open).
@@ -56,7 +62,7 @@ func OpenFile(path string) (Source, error) {
 
 	// Read the first non-empty line to detect format.
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	sc.Buffer(make([]byte, 64*1024), scannerMaxLine)
 	var firstLine []byte
 	for sc.Scan() {
 		firstLine = sc.Bytes()

@@ -27,8 +27,8 @@ func injectBorderForTest(rendered string, blocks []Block, current int, width int
 			b.WriteByte('\n')
 		}
 		if i >= blocks[current].StartLine && i <= blocks[current].EndLine {
-			if !hasCommentGutter(line) {
-				line = leftBar + " " + trimLeadingVisible(line, 2)
+			if !HasCommentGutter(line) {
+				line = leftBar + " " + TrimLeadingVisible(line, 2)
 			}
 		}
 		b.WriteString(line)
@@ -41,53 +41,7 @@ func injectBorderForTest(rendered string, blocks []Block, current int, width int
 	return b.String()
 }
 
-// trimLeadingVisible strips n visible (non-ANSI) characters from the
-// start of s.
-func trimLeadingVisible(s string, n int) string {
-	var b strings.Builder
-	skipped := 0
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			b.WriteRune(r)
-			continue
-		}
-		if inEscape {
-			b.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		if skipped < n {
-			skipped++
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
 
-// hasCommentGutter reports whether s starts with the gutter marker
-// (▸ or •) that the comment renderer prepends to commented blocks.
-func hasCommentGutter(s string) bool {
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		return r == '▸' || r == '•'
-	}
-	return false
-}
 
 func TestBorder_AppearsAboveAndBelowCurrentBlock(t *testing.T) {
 	// Three blocks at lines 0-1, 4-5, 8-9 (with 1-line gaps from glamour).
@@ -179,15 +133,15 @@ func TestBorder_MovesWithCurrent(t *testing.T) {
 
 func TestTrimLeadingVisible(t *testing.T) {
 	// No ANSI: drops first n chars.
-	if got := trimLeadingVisible("hello", 2); got != "llo" {
+	if got := TrimLeadingVisible("hello", 2); got != "llo" {
 		t.Errorf("plain trim: got %q want %q", got, "llo")
 	}
 	// With ANSI prefix: drops first n visible chars but keeps escape codes.
-	if got := trimLeadingVisible("\x1b[31mab", 2); got != "\x1b[31m" {
+	if got := TrimLeadingVisible("\x1b[31mab", 2); got != "\x1b[31m" {
 		t.Errorf("ANSI trim: got %q want %q", got, "\x1b[31m")
 	}
 	// n > visible length: returns empty (escape codes preserved).
-	if got := trimLeadingVisible("\x1b[31mab", 5); got != "\x1b[31m" {
+	if got := TrimLeadingVisible("\x1b[31mab", 5); got != "\x1b[31m" {
 		t.Errorf("over-trim: got %q want %q", got, "\x1b[31m")
 	}
 }
@@ -200,8 +154,8 @@ func TestHasCommentGutter(t *testing.T) {
 		"\x1b[31mred text":                 false,
 	}
 	for in, want := range cases {
-		if got := hasCommentGutter(in); got != want {
-			t.Errorf("hasCommentGutter(%q) = %v want %v", in, got, want)
+		if got := HasCommentGutter(in); got != want {
+			t.Errorf("HasCommentGutter(%q) = %v want %v", in, got, want)
 		}
 	}
 }

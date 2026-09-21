@@ -1,6 +1,7 @@
 package render
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,10 +66,10 @@ func TestFormatCommentsAppendix_ExcerptTruncation(t *testing.T) {
 }
 
 func TestItoa(t *testing.T) {
-	cases := map[int]string{0: "0", 1: "1", -1: "-1", 42: "42", 12345: "12345"}
-	for n, want := range cases {
-		if got := itoa(n); got != want {
-			t.Errorf("itoa(%d) = %q want %q", n, got, want)
+	tests := map[int]string{0: "0", 1: "1", -1: "-1", 42: "42", 12345: "12345"}
+	for n, want := range tests {
+		if got := strconv.Itoa(n); got != want {
+			t.Errorf("strconv.Itoa(%d) = %q want %q", n, got, want)
 		}
 	}
 }

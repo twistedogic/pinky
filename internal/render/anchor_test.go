@@ -53,7 +53,7 @@ func TestBlockByteRange_Code(t *testing.T) {
 
 func TestRenderedLineRange_BlockLevel(t *testing.T) {
 	md := "# A\n\npara one\n\n## B\n\npara two"
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	start, end := RenderedLineRange(blocks, 1, -1, -1)
 	if start != blocks[1].StartLine || end != blocks[1].EndLine {
 		t.Errorf("block-level projection should equal block range; got [%d,%d] want [%d,%d]",
@@ -63,7 +63,7 @@ func TestRenderedLineRange_BlockLevel(t *testing.T) {
 
 func TestRenderedLineRange_InlineWithinBlock(t *testing.T) {
 	md := "first line\nsecond line\nthird line\n"
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	// Source "second line" starts around byte offset 11 (after "first line\n").
 	src := []byte(md)
 	idx := strings.Index(string(src), "second line")
@@ -82,7 +82,7 @@ func TestRenderedLineRange_InlineWithinBlock(t *testing.T) {
 func TestRenderedLineRange_OneLineDriftOnWrap(t *testing.T) {
 	// A long paragraph that wraps to multiple rendered lines.
 	md := "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua"
-	blocks := BuildBlockIndex(md, 40) // narrow width → forces wrapping
+	_, blocks := RenderMessage(md, 40) // narrow width → forces wrapping
 	if len(blocks) == 0 {
 		t.Fatal("expected at least one block")
 	}
@@ -100,7 +100,7 @@ func TestRenderedLineRange_OneLineDriftOnWrap(t *testing.T) {
 
 func TestRenderedLineRange_OffTheEndClamps(t *testing.T) {
 	md := "alpha\nbravo\ncharlie\n"
-	blocks := BuildBlockIndex(md, 80)
+	_, blocks := RenderMessage(md, 80)
 	// offset >> len(Source) → should clamp to last line of block.
 	start, end := RenderedLineRange(blocks, 0, 9999, 99999)
 	if end != blocks[0].EndLine {
