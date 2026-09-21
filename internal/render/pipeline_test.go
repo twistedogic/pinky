@@ -12,6 +12,10 @@ func stripANSI(s string) string {
 	return ansiRe.ReplaceAllString(s, "")
 }
 
+func visibleLen(s string) int {
+	return len([]rune(stripANSI(s)))
+}
+
 // TestPipeline_HeadingParaCode exercises parse → render → border
 // injection against a representative agent message.
 func TestPipeline_HeadingParaCode(t *testing.T) {
@@ -23,13 +27,25 @@ func TestPipeline_HeadingParaCode(t *testing.T) {
 	if rendered == "" {
 		t.Fatal("rendered output is empty")
 	}
-	// The rendered output should contain all three block contents.
-	// Strip ANSI codes for substring check — dark style adds spaces and
-	// colors that complicate direct matching.
 	plain := stripANSI(rendered)
 	for _, want := range []string{"Setup", "Read the file", "func main"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("rendered missing %q", want)
+		}
+	}
+}
+
+// TestPipeline_FillsWidth verifies the rendered markdown content
+// uses the requested width, not width-2 (the dark preset's margin).
+// Regression guard for the glamour margin compensation in NewRenderer.
+func TestPipeline_FillsWidth(t *testing.T) {
+	for _, w := range []int{40, 80, 120} {
+		rendered, _ := RenderMessage("# Title\n\nBody paragraph.\n", w)
+		for i, line := range strings.Split(rendered, "\n") {
+			if vw := visibleLen(line); vw > 0 && vw != w {
+				t.Errorf("width=%d: line %d width=%d (want %d)\n  line: %q",
+					w, i, vw, w, line)
+			}
 		}
 	}
 }

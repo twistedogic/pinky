@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -80,6 +81,9 @@ type model struct {
 	// Error state: set when initialization or attach fails. The TUI
 	// shows the message and exits on any key press.
 	err error
+
+	// help toggles the in-TUI help overlay (rendered via help.Model).
+	help bool
 }
 
 // newModel returns a picker model. Callers must either call setAgents
@@ -97,9 +101,30 @@ func (m *model) setAgents(agents []session.AgentSession) {
 	m.cursor = 0
 }
 
+// viewportSize returns (w, h) for the viewport at idle state. If the
+// window size hasn't been reported yet (m.width/m.height are 0), fall
+// back to safe defaults; reflow() will resize once WindowSizeMsg
+// fires.
+func (m *model) viewportSize() (int, int) {
+	w := m.width
+	if w <= 0 {
+		w = 80
+	}
+	h := m.height - statusHeight
+	if h < 1 {
+		h = 20
+	}
+	return w, h
+}
+
 // attach opens a session source + history for the given pane and
 // transitions to idle state. History is opened for append-only writing
 // but is NOT loaded back into the view (the view starts fresh).
+//
+// Always seeds the viewport via refreshViewport so the placeholder
+// (or the latest message if one was already known) renders immediately
+// — same behavior whether the user picked the session from the picker
+// or jumped straight to it via --target.
 func (m *model) attach(pane string) error {
 	src, err := session.Open(pane)
 	if err != nil {
@@ -117,12 +142,15 @@ func (m *model) attach(pane string) error {
 	ta.CharLimit = 0
 	ta.SetHeight(composeHeight)
 
+	w, h := m.viewportSize()
+
 	m.pane = pane
 	m.src = src
 	m.hist = hist
-	m.viewport = viewport.New(40, 20)
+	m.viewport = viewport.New(w, h)
 	m.textarea = ta
 	m.state = stateIdle
+	m.refreshViewport()
 	return nil
 }
 
@@ -143,12 +171,15 @@ func (m *model) attachWithFile(path string) error {
 	ta.CharLimit = 0
 	ta.SetHeight(composeHeight)
 
+	w, h := m.viewportSize()
+
 	m.pane = "(explicit)"
 	m.src = src
 	m.hist = nil
-	m.viewport = viewport.New(40, 20)
+	m.viewport = viewport.New(w, h)
 	m.textarea = ta
 	m.state = stateIdle
+	m.refreshViewport()
 	return nil
 }
 
@@ -250,8 +281,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+C and the help toggle are global across every state.
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
+	}
+	if key.Matches(msg, defaultKeyMap.Help) {
+		m.help = !m.help
+		if m.help {
+			m.showHelpMarkdown()
+		} else {
+			m.refreshViewport()
+		}
+		return m, nil
+	}
+	// In help mode, any other key dismisses the help and is
+	// reprocessed (so the user can hit a navigation key without
+	// having to press ? first).
+	if m.help {
+		m.help = false
+		m.refreshViewport()
+		return m.Update(msg)
 	}
 
 	switch m.state {
@@ -262,34 +311,54 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case stateCompose:
 		return m.handleComposeKey(msg)
 	case stateError:
-		return m, tea.Quit
+		// Any key dismisses the error and quits.
+		if key.Matches(msg, defaultKeyMap.QuitError) {
+			return m, tea.Quit
+		}
+		return m, nil
 	}
 	return m, nil
 }
 
+// showHelpMarkdown renders the per-state keymap as markdown via the
+// existing glamour pipeline and pushes it into the viewport.
+func (m *model) showHelpMarkdown() {
+	r := m.getRenderer()
+	if r == nil {
+		m.viewport.SetContent(keymapMarkdown(m.state))
+		return
+	}
+	rendered, _ := render.RenderMessage(keymapMarkdown(m.state), m.width)
+	m.viewport.SetContent(rendered)
+}
+
+// enterCompose transitions to compose mode with the textarea reset
+// and focused. Shared by Ctrl+N and the `c` alias.
+func (m *model) enterCompose() {
+	m.state = stateCompose
+	m.vim = render.VimState{}
+	m.textarea.Focus()
+	m.textarea.Reset()
+	m.reflow()
+}
+
 func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyUp:
+	switch {
+	case key.Matches(msg, defaultKeyMap.Up):
 		m.moveCursor(-1)
-	case tea.KeyDown:
+	case key.Matches(msg, defaultKeyMap.Down):
 		m.moveCursor(+1)
-	case tea.KeyEnter:
+	case key.Matches(msg, defaultKeyMap.Pick):
 		if err := m.selectAgent(m.cursor); err != nil {
 			m.state = stateError
 			m.err = err
 			return m, nil
 		}
-		m.refreshViewport()
+		// attach() already seeded the viewport with the placeholder
+		// (or the current latest). Just kick off polling.
 		return m, tea.Batch(tickCmd(), pollCmd(m.src))
-	}
-	// Vim-style aliases (j/k) for picker navigation.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case 'j':
-			m.moveCursor(+1)
-		case 'k':
-			m.moveCursor(-1)
-		}
+	case key.Matches(msg, defaultKeyMap.QuitPick):
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -307,31 +376,33 @@ func (m *model) moveCursor(delta int) {
 }
 
 func (m model) handleIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlN:
-		m.state = stateCompose
-		m.vim = render.VimState{} // clear any pending two-key state
-		m.textarea.Focus()
-		m.textarea.Reset()
-		m.reflow()
+	switch {
+	case key.Matches(msg, defaultKeyMap.Compose):
+		m.enterCompose()
 		return m, nil
-	case tea.KeyCtrlR:
+	case key.Matches(msg, defaultKeyMap.Refresh):
 		return m, pollCmd(m.src)
-	case tea.KeyUp:
+	case key.Matches(msg, defaultKeyMap.LineUp):
 		m.viewport.LineUp(1)
 		return m, nil
-	case tea.KeyDown:
+	case key.Matches(msg, defaultKeyMap.LineDown):
 		m.viewport.LineDown(1)
 		return m, nil
-	case tea.KeyPgUp:
-		m.viewport.GotoTop()
+	case key.Matches(msg, defaultKeyMap.PrevBlock):
+		m.applyAction(render.VimPrevBlock)
 		return m, nil
-	case tea.KeyPgDown:
+	case key.Matches(msg, defaultKeyMap.NextBlock):
 		m.applyAction(render.VimNextBlock)
 		return m, nil
+	case key.Matches(msg, defaultKeyMap.BottomLine):
+		m.applyAction(render.VimGotoBottom)
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.QuitIdle):
+		return m, tea.Quit
 	}
 
-	// Vim navigation.
+	// Vim two-key sequences (gg, ]], [[): match by the first key and
+	// let the state machine complete the pair.
 	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
 		action := m.vim.Handle(msg.Runes[0], time.Now())
 		m.applyAction(action)
@@ -345,8 +416,8 @@ func (m model) handleIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlS:
+	switch {
+	case key.Matches(msg, defaultKeyMap.Send):
 		text := m.textarea.Value()
 		if text == "" {
 			return m, nil
@@ -371,7 +442,7 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textarea.Reset()
 		m.reflow()
 		return m, nil
-	case tea.KeyEsc:
+	case key.Matches(msg, defaultKeyMap.Cancel):
 		m.state = stateIdle
 		m.textarea.Blur()
 		m.textarea.Reset()
@@ -451,6 +522,14 @@ var borderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 // placeholderStyle is the dim style for the empty-state line.
 var placeholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
 
+// statusBarStyle paints the bottom status line as a full-width bar so
+// pinky visually anchors to the terminal edges instead of leaving
+// whitespace on the right.
+var statusBarStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("241")).
+	Background(lipgloss.Color("236")).
+	Padding(0, 1)
+
 func (m *model) refreshViewport() {
 	if m.latest.text == "" {
 		m.blocks = nil
@@ -497,21 +576,63 @@ func (m *model) injectBorder(rendered string) string {
 func (m model) View() string {
 	switch m.state {
 	case statePicking:
-		return m.pickerView()
+		return m.fillWidth(m.pickerView())
 	case stateCompose:
-		return lipgloss.JoinVertical(lipgloss.Left,
+		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.textarea.View(),
 			m.statusLine(),
-		)
+		))
 	case stateError:
-		return m.errorView()
+		return m.fillWidth(m.errorView())
 	default:
-		return lipgloss.JoinVertical(lipgloss.Left,
+		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.statusLine(),
-		)
+		))
 	}
+}
+
+// visibleWidth returns the visible (ANSI-stripped) width of s. Used
+// to pad lines to the terminal width; lipgloss.Width is off-by-one
+// when styling adds background-color padding (e.g. statusBarStyle).
+func visibleWidth(s string) int {
+	n := 0
+	inEscape := false
+	for _, r := range s {
+		if r == 0x1b {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// fillWidth pads every line of s to m.width so the rendered output
+// spans the full terminal. Before WindowSizeMsg fires, m.width is 0
+// and we return s unchanged.
+func (m model) fillWidth(s string) string {
+	if m.width <= 0 {
+		return s
+	}
+	var b strings.Builder
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+		if pad := m.width - visibleWidth(line); pad > 0 {
+			b.WriteString(strings.Repeat(" ", pad))
+		}
+	}
+	return b.String()
 }
 
 // errorView renders a single centered error message. The TUI shows
@@ -562,5 +683,13 @@ func (m model) statusLine() string {
 	if m.streaming {
 		dot = "●"
 	}
-	return fmt.Sprintf(" %s %s", dot, m.pane)
+	text := fmt.Sprintf("%s %s", dot, m.pane)
+	rendered := statusBarStyle.Render(text)
+	if m.width <= 0 {
+		return rendered
+	}
+	if pad := m.width - visibleWidth(rendered); pad > 0 {
+		rendered += strings.Repeat(" ", pad)
+	}
+	return rendered
 }

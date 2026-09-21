@@ -41,10 +41,22 @@ type Block struct {
 
 // NewRenderer returns a glamour TermRenderer configured for pinky.
 // ponytail: cached by width at the call site; revisit if memory grows.
+//
+// The pinky style lives in style.go and uses the same color family
+// as the lipgloss TUI (212 accent, 250 body, 241 dim, 42 user),
+// so headings/links/etc feel native to the rest of the UI.
+//
+// The dark preset has a built-in document margin of 2 chars; we pass
+// width+2 to WordWrap so the visible content area equals the
+// requested width.
+//
+// `WithChromaFormatter("terminal256")` enables syntax highlighting
+// for fenced code blocks via chroma.
 func NewRenderer(width int) (*glamour.TermRenderer, error) {
 	return glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(width),
+		glamour.WithStyles(pinkyStyle()),
+		glamour.WithChromaFormatter("terminal256"),
+		glamour.WithWordWrap(width+2),
 	)
 }
 
@@ -54,7 +66,13 @@ func NewRenderer(width int) (*glamour.TermRenderer, error) {
 // excluded. List items each become their own block.
 func BuildBlockIndex(md string, width int) []Block {
 	src := []byte(md)
-	mdParser := goldmark.New(goldmark.WithExtensions(extension.GFM))
+	mdParser := goldmark.New(
+		goldmark.WithExtensions(
+			extension.GFM,           // GitHub-flavored markdown (tables, strikethrough, task lists, autolinks)
+			extension.Linkify,       // auto-detect URLs in text and turn them into links
+			extension.DefinitionList,
+		),
+	)
 	root := mdParser.Parser().Parse(text.NewReader(src))
 
 	r, err := NewRenderer(width)

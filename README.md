@@ -127,11 +127,14 @@ always shown unless `--target` is passed.
 | Key | Action |
 |---|---|
 | `Ctrl+N` | Enter compose mode |
+| `c` | Enter compose mode (vim-style alias) |
 | `Enter` | Newline (in compose) |
 | `Ctrl+S` | Send the redirect to the agent |
 | `Esc` | Cancel compose |
 | `Ctrl+R` | Re-poll the agent session |
+| `q` | Quit (idle and picker states) |
 | `Ctrl+C` | Quit |
+| `?` | Toggle keymap page (markdown-rendered in the viewport) |
 
 The main view shows the latest complete agent message as rendered
 markdown. Within that message:
@@ -146,6 +149,12 @@ markdown. Within that message:
 | `PgUp` | Top of message |
 | `PgDn` | Next block |
 | `↑` / `↓` | Aliases for `j` / `k` |
+
+In the picker:
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Move selection (alias for `↓` / `↑`) |
 
 The currently-focused block is marked by horizontal border lines above
 and below it.
