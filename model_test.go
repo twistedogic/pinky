@@ -248,21 +248,19 @@ func TestNavKey_S_NavWithoutCommentsIsNoop(t *testing.T) {
 	}
 }
 
-// TestCommentComposer_EnterSavesAndSends: regression for
-// save-and-send-on-enter; pressing Enter in the comment composer
-// saves the new comment AND dispatches the entire batch via one
-// sendToPane call (m.comments is cleared on success).
-func TestCommentComposer_EnterSavesAndSends(t *testing.T) {
+// TestCommentComposer_EnterSavesAndExits: pressing Enter in the
+// comment composer saves the new comment and returns to nav
+// without dispatching anything. Flush happens only via `s` in nav.
+func TestCommentComposer_EnterSavesAndExits(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateNav
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 
-	var sentText string
 	var sentCalls int
 	prev := sendToPane
-	sendToPane = func(_, text string) error { sentText = text; sentCalls++; return nil }
+	sendToPane = func(_, _ string) error { sentCalls++; return nil }
 	t.Cleanup(func() { sendToPane = prev })
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
@@ -277,20 +275,101 @@ func TestCommentComposer_EnterSavesAndSends(t *testing.T) {
 	if got.state != stateNav {
 		t.Errorf("state = %d want stateNav after Enter", got.state)
 	}
-	if sentCalls != 1 {
-		t.Errorf("sendToPane calls = %d want 1", sentCalls)
+	if sentCalls != 0 {
+		t.Errorf("sendToPane calls = %d want 0 (Enter must not dispatch)", sentCalls)
 	}
-	if !strings.Contains(sentText, "rename to foo") {
-		t.Errorf("sentText must contain the new comment; got %q", sentText)
+	if len(got.comments) != 1 {
+		t.Fatalf("comments = %d want 1 (Enter must save)", len(got.comments))
+	}
+	if got.comments[0].Text != "rename to foo" {
+		t.Errorf("saved comment text = %q want %q", got.comments[0].Text, "rename to foo")
+	}
+	if got.comments[0].BlockIdx < 0 || got.comments[0].BlockIdx >= len(got.blocks) {
+		t.Errorf("saved comment anchor BlockIdx = %d out of range", got.comments[0].BlockIdx)
+	}
+}
+
+// TestCommentComposer_MultipleCommentsAccumulate: two `c → type →
+// Enter` cycles accumulate both comments in memory without firing
+// any inject; flush is the user's separate action.
+func TestCommentComposer_MultipleCommentsAccumulate(t *testing.T) {
+	m := newIdleModelForKeymap(t)
+	m.state = stateNav
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# title\n\nbody"}
+	m.refreshViewport()
+	initCommentTAForTest(&m)
+
+	var sentCalls int
+	prev := sendToPane
+	sendToPane = func(_, _ string) error { sentCalls++; return nil }
+	t.Cleanup(func() { sendToPane = prev })
+
+	// First comment
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = updated.(model)
+	m.commentTa.SetValue("fix the title")
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+
+	// Second comment
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = updated.(model)
+	m.commentTa.SetValue("expand the body")
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+
+	if sentCalls != 0 {
+		t.Errorf("sendToPane calls = %d want 0 (Enter must not dispatch)", sentCalls)
+	}
+	if len(got.comments) != 2 {
+		t.Fatalf("comments = %d want 2 (accumulated in memory)", len(got.comments))
+	}
+	if got.comments[0].Text != "fix the title" || got.comments[1].Text != "expand the body" {
+		t.Errorf("comments out of order: %q, %q", got.comments[0].Text, got.comments[1].Text)
+	}
+	if got.state != stateNav {
+		t.Errorf("state = %d want stateNav", got.state)
+	}
+}
+
+// TestCommentComposer_EmptyEnterIsNoop: pressing Enter with an empty
+// composer returns to nav without saving a comment or firing any
+// inject — covered by saveComment's empty-text guard.
+func TestCommentComposer_EmptyEnterIsNoop(t *testing.T) {
+	m := newIdleModelForKeymap(t)
+	m.state = stateNav
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
+	m.refreshViewport()
+	initCommentTAForTest(&m)
+
+	var sentCalls int
+	prev := sendToPane
+	sendToPane = func(_, _ string) error { sentCalls++; return nil }
+	t.Cleanup(func() { sendToPane = prev })
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = updated.(model)
+	if m.state != stateCommentComposer {
+		t.Fatalf("setup: state = %d want stateCommentComposer", m.state)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+	if got.state != stateNav {
+		t.Errorf("state = %d want stateNav", got.state)
 	}
 	if len(got.comments) != 0 {
-		t.Errorf("comments should clear after successful send; got %d", len(got.comments))
+		t.Errorf("comments = %d want 0 (empty Enter must not save)", len(got.comments))
+	}
+	if sentCalls != 0 {
+		t.Errorf("sendToPane calls = %d want 0", sentCalls)
 	}
 }
 
 // TestCommentComposer_EnterDoesNotInsertNewline: Enter in the
 // single-line composer commits the buffer verbatim — no newline
-// inserted by the keypress itself.
+// inserted by the keypress itself. (Checks the saved comment text,
+// because Enter no longer dispatches.)
 func TestCommentComposer_EnterDoesNotInsertNewline(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateNav
@@ -298,64 +377,31 @@ func TestCommentComposer_EnterDoesNotInsertNewline(t *testing.T) {
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 
-	var sentText string
-	prev := sendToPane
-	sendToPane = func(_, text string) error { sentText = text; return nil }
-	t.Cleanup(func() { sendToPane = prev })
-
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	m = updated.(model)
 	m.commentTa.SetValue("plain comment")
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := updated.(model)
-	if !strings.HasSuffix(sentText, "plain comment\n") {
-		t.Errorf("sentText must end with the comment text followed by newline (no embedded newline in comment); got %q", sentText)
+	if len(got.comments) != 1 {
+		t.Fatalf("comments = %d want 1", len(got.comments))
 	}
-	if !strings.Contains(sentText, "plain comment") {
-		t.Errorf("sentText must contain the comment text; got %q", sentText)
+	if strings.Contains(got.comments[0].Text, "\n") {
+		t.Errorf("saved comment must not contain an embedded newline; got %q", got.comments[0].Text)
+	}
+	if got.comments[0].Text != "plain comment" {
+		t.Errorf("saved comment text = %q want %q", got.comments[0].Text, "plain comment")
 	}
 	if got.state != stateNav {
 		t.Errorf("state = %d want stateNav", got.state)
 	}
 }
 
-// TestCommentComposer_EnterSendsMultipleInOneCall: when N comments
-// are already accumulated, a new Enter in the composer dispatches
-// all N+1 comments in a single sendToPane call.
-func TestCommentComposer_EnterSendsMultipleInOneCall(t *testing.T) {
-	m := newIdleModelForKeymap(t)
-	m.state = stateNav
-	m.latest = session.Message{Role: session.RoleAssistant, Text: "# title\n\nbody"}
-	m.refreshViewport()
-	initCommentTAForTest(&m)
-
-	m.comments = []render.Comment{
-		{BlockIdx: 0, Text: "fix the title", CreatedAt: time.Now()},
-	}
-
-	var sentText string
-	var sentCalls int
-	prev := sendToPane
-	sendToPane = func(_, text string) error { sentText = text; sentCalls++; return nil }
-	t.Cleanup(func() { sendToPane = prev })
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	m = updated.(model)
-	m.commentTa.SetValue("expand the body")
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	got := updated.(model)
-	if sentCalls != 1 {
-		t.Errorf("sendToPane calls = %d want 1 (all comments in one inject)", sentCalls)
-	}
-	if !strings.Contains(sentText, "fix the title") || !strings.Contains(sentText, "expand the body") {
-		t.Errorf("sentText must contain both comments; got %q", sentText)
-	}
-	if len(got.comments) != 0 {
-		t.Errorf("comments should clear after successful send; got %d", len(got.comments))
-	}
-}
+// (TestCommentComposer_EnterSendsMultipleInOneCall removed: under
+// the new contract, Enter no longer dispatches. Multi-comment
+// accumulation is covered by TestCommentComposer_MultipleCommentsAccumulate;
+// flushing the accumulated batch via `s` is covered by
+// TestSubmitComments_ClearsOnSuccess and TestNavKey_S_NavWithCommentsSends.)
 
 // TestCompose_I_TogglesIncludeComments: regression for
 // single-key-keymap; pressing `i` in compose toggles the

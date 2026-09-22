@@ -128,11 +128,11 @@ var defaultKeyMap = keyMap{
 		key.WithHelp("i", "include comments"),
 	),
 
-	// Comment composer (Enter saves the new comment AND sends every
-	// accumulated comment in one batch via the inject pipeline).
+	// Comment composer (Enter saves the new comment and returns to
+	// nav without sending; `s` in nav flushes the accumulated batch).
 	SaveComment: key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("⏎", "save & send all"),
+		key.WithHelp("⏎", "save"),
 	),
 
 	// Error

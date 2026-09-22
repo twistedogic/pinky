@@ -137,7 +137,7 @@ markdown. Within that message:
 | `v` | Enter visual mode (toggle; `v` again exits) |
 | `Esc` | Exit visual mode |
 | `c` | Open the comment composer (anchored to selection, or whole block) |
-| `s` | Send any pending comments (retry path after a failed send) |
+| `s` | Send all accumulated comments in one tmux inject |
 | `n` | Enter compose mode |
 | `r` | Re-poll the agent session |
 | `q` / `Ctrl+C` | Quit |
@@ -157,8 +157,8 @@ markdown. Within that message:
 
 | Key | Action |
 |---|---|
-| `Enter` | Save comment and send all accumulated comments in one batch |
-| `Esc` | Cancel |
+| `Enter` | Save comment and return to nav (does not send) |
+| `Esc` | Cancel draft and return to nav |
 
 ### Picker
 

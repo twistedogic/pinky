@@ -7,21 +7,25 @@ import (
 	"strings"
 )
 
-// FormatCommentsAppendix builds the redirect appendix string for a
+// FormatCommentsAppendix builds the appendix body string for a
 // set of comments. Empty comments slice → empty string.
 //
-// Layout per design D8:
+// Layout:
 //
-//	---
 //	N comments:
 //	- block "<excerpt>" (lines X-Y): <text>
 //	- inline "<excerpt>" (line Z): <text>
 //
+// No leading separator: the caller composes "\n\n---\n" when (and
+// only when) there is preceding prose to separate from. The
+// comment-only flush path (submitAllComments) calls this function
+// directly and gets a body-only payload, so the agent never sees a
+// naked "---" as its first line.
+//
 // Excerpt is the first ~40 chars of the block source (block-level)
 // or the inline Source (inline), with trailing ellipsis on
 // truncation. Comments are emitted in CreatedAt order
-// (chronological). When the include flag is on but len(comments)==0,
-// the caller gets back "" so the redirect is sent as plain text.
+// (chronological).
 func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 	if len(comments) == 0 {
 		return ""
@@ -32,7 +36,6 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 		return cmp.Compare(a.CreatedAt.UnixNano(), b.CreatedAt.UnixNano())
 	})
 	var b strings.Builder
-	b.WriteString("\n\n---\n")
 	label := "comments"
 	if len(sorted) == 1 {
 		label = "comment"

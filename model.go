@@ -417,8 +417,8 @@ func (m *model) enterCommentComposer(a commentAnchor) {
 }
 
 // handleCommentComposerKey processes a keypress in stateCommentComposer.
-// Enter saves the new comment and dispatches every accumulated comment
-// in one batch via submitAllComments; Esc cancels.
+// Enter saves the new comment and returns to nav without sending; the
+// accumulated batch flushes only via `s` in stateNav. Esc cancels.
 func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
@@ -426,7 +426,6 @@ func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		m.saveComment()
-		m.submitAllComments()
 		return m, nil
 	}
 	var taCmd tea.Cmd
@@ -610,7 +609,7 @@ func (m *model) handleSend() {
 			return
 		}
 		if m.includeComments && len(m.comments) > 0 {
-			text += render.FormatCommentsAppendix(m.comments, m.blocks)
+			text += "\n\n---\n" + render.FormatCommentsAppendix(m.comments, m.blocks)
 		}
 		if m.hist != nil {
 			_ = m.hist.Append(string(session.RoleUser), text)

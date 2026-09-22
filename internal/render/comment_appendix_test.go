@@ -18,7 +18,7 @@ func TestFormatCommentsAppendix_SingleBlock(t *testing.T) {
 	blocks := []Block{{Kind: BlockParagraph, Source: "first line\nsecond line", StartLine: 0, EndLine: 2}}
 	comments := []Comment{{BlockIdx: 0, CharStart: -1, Text: "looks good", CreatedAt: time.Now()}}
 	got := FormatCommentsAppendix(comments, blocks)
-	for _, want := range []string{"---", "1 comment:", "block", "looks good"} {
+	for _, want := range []string{"1 comment:", "block", "looks good"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("expected %q in appendix; got %q", want, got)
 		}
@@ -50,10 +50,10 @@ func TestFormatCommentsAppendix_ExcerptFlattensNewlines(t *testing.T) {
 	blocks := []Block{{Kind: BlockParagraph, Source: "first line\nsecond line\nthird line", StartLine: 0, EndLine: 4}}
 	comments := []Comment{{BlockIdx: 0, CharStart: -1, Text: "x", CreatedAt: time.Now()}}
 	got := FormatCommentsAppendix(comments, blocks)
-	// Header "\n\n---\n1 comment:\n" (4 newlines) + 1 comment line + trailing "\n"
-	// → 5 newlines. A raw-newline excerpt would push this higher.
-	if c := strings.Count(got, "\n"); c != 5 {
-		t.Errorf("expected 5 newlines (one comment line); got %d:\n%q", c, got)
+	// Body-only output: "1 comment:\n" (1 newline) + 1 comment line + trailing "\n"
+	// → 2 newlines. A raw-newline excerpt would push this higher.
+	if c := strings.Count(got, "\n"); c != 2 {
+		t.Errorf("expected 2 newlines (one comment line); got %d:\n%q", c, got)
 	}
 	// Find the comment line and verify it's single-line with all
 	// source lines flattened.
@@ -71,6 +71,22 @@ func TestFormatCommentsAppendix_ExcerptFlattensNewlines(t *testing.T) {
 		if !strings.Contains(commentLine, want) {
 			t.Errorf("comment line missing flattened %q; got: %q", want, commentLine)
 		}
+	}
+}
+
+// TestFormatCommentsAppendix_NoLeadingSeparator locks in the
+// invariant that the renderer never emits a leading "---" line.
+// Callers compose the separator themselves when preceding prose
+// exists; a comment-only flush must not start with "---".
+func TestFormatCommentsAppendix_NoLeadingSeparator(t *testing.T) {
+	blocks := []Block{{Kind: BlockParagraph, Source: "body", StartLine: 0, EndLine: 1}}
+	comments := []Comment{{BlockIdx: 0, CharStart: -1, Text: "x", CreatedAt: time.Now()}}
+	got := FormatCommentsAppendix(comments, blocks)
+	if strings.HasPrefix(got, "---") {
+		t.Errorf("appendix must not start with '---'; got %q", got)
+	}
+	if !strings.HasPrefix(got, "1 comment:") {
+		t.Errorf("appendix must start with the count line; got %q", got)
 	}
 }
 
