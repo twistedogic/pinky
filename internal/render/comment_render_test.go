@@ -14,7 +14,7 @@ func mustTime(t *testing.T) time.Time {
 func TestRenderMessageWithComments_NoCommentsMatchesPlain(t *testing.T) {
 	md := "# Title\n\nbody paragraph.\n"
 	withComments, _ := RenderMessageWithComments(md, 80, nil)
-	plain, _ := RenderMessage(md, 80)
+	plain, _ := renderBlocks(md, 80)
 	if withComments != plain {
 		t.Errorf("zero-comment render should equal plain render\n  with: %q\n  plain: %q", withComments, plain)
 	}
@@ -127,22 +127,7 @@ func TestMarker(t *testing.T) {
 	}
 }
 
-// stripANSIForRender removes ANSI escape codes from s.
-func stripANSIForRender(s string) string {
-	var b strings.Builder
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
+// stripANSIForRender keeps the historical name; the implementation
+// lives in pipeline_test.go (package-shared). ponytail: alias kept so
+// the call sites read cleanly; remove if/when all callers migrate.
+func stripANSIForRender(s string) string { return stripANSI(s) }

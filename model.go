@@ -41,14 +41,10 @@ type sessionMsg struct {
 }
 
 // commentAnchor captures the target for a comment being composed.
-// editing is true when re-opening the composer for an existing comment
-// (the model's e key); editingIdx points into m.comments.
 type commentAnchor struct {
-	blockIdx   int
-	charA      int
-	charC      int
-	editing    bool
-	editingIdx int
+	blockIdx int
+	charA    int
+	charC    int
 }
 
 type model struct {
@@ -181,12 +177,23 @@ func (m *model) viewportSize() (int, int) {
 // (placeholder seed, textareas, comment slice) once source +
 // history are resolved. ponytail: pull the shared 25 lines out so the
 // two entry points only have to source/resolve before calling.
+// idle is the shared tail of attach/attachWithFile: the view setup
+// (placeholder seed, textareas, comment slice) once source +
+// history are resolved. Source and history come from the caller
+// (session.Open + history.Open for the picker path; session.OpenFile
+// only for --session-file); everything below is identical.
 func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	ta := textarea.New()
 	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	ta.SetHeight(composeHeight)
+
+	cta := textarea.New()
+	cta.Placeholder = "comment — Esc cancel"
+	cta.ShowLineNumbers = false
+	cta.CharLimit = 0
+	cta.SetHeight(1)
 
 	w, h := m.viewportSize()
 
@@ -195,9 +202,9 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	m.hist = hist
 	m.viewport = viewport.New(w, h)
 	m.textarea = ta
+	m.commentTa = cta
 	m.state = stateNav
 	m.refreshViewport()
-	m.initCommentComposer()
 	m.comments = nil
 }
 
@@ -356,18 +363,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // t.Cleanup.
 var sendToPane = inject.Send
 
-// submitAllComments sends every accumulated comment as a single
-// redirect through the existing inject pipeline and clears the
-// comment slice on success. With no comments to send it is a no-op.
-// On inject failure the comments are kept (so the user can retry)
-// and the error is surfaced via the same "[send failed: ...]"
-// placeholder the compose path uses, keeping both redirect flows
-// visible in one channel.
-func (m *model) submitAllComments() {
-	if len(m.comments) == 0 {
-		return
-	}
-	text := render.FormatCommentsAppendix(m.comments, m.blocks)
+// dispatch sends text to the agent pane, recording to history on
+// success and surfacing a "[send failed: ...]" placeholder in the
+// main view on failure. Returns true on success.
+func (m *model) dispatch(text string) bool {
 	if m.hist != nil {
 		_ = m.hist.Append(string(session.RoleUser), text)
 	}
@@ -377,6 +376,21 @@ func (m *model) submitAllComments() {
 		}
 		m.refreshViewport()
 		m.viewport.GotoBottom()
+		return false
+	}
+	return true
+}
+
+// submitAllComments sends every accumulated comment as a single
+// redirect through the existing inject pipeline and clears the
+// comment slice on success. With no comments to send it is a no-op.
+// On inject failure the comments are kept (so the user can retry)
+// and the error is surfaced via dispatch.
+func (m *model) submitAllComments() {
+	if len(m.comments) == 0 {
+		return
+	}
+	if !m.dispatch(render.FormatCommentsAppendix(m.comments, m.blocks)) {
 		return
 	}
 	m.comments = nil
@@ -390,26 +404,11 @@ func (m *model) enterCompose() {
 	m.reflow()
 }
 
-// initCommentComposer creates the comment-composer textarea. Called
-// from attach() / attachWithFile(). Kept separate from m.textarea so
-// the redirect composer state isn't disturbed.
-func (m *model) initCommentComposer() {
-	ta := textarea.New()
-	ta.Placeholder = "comment — Esc cancel"
-	ta.ShowLineNumbers = false
-	ta.CharLimit = 0
-	ta.SetHeight(1)
-	m.commentTa = ta
-}
-
 // enterCommentComposer seeds the comment composer with the given
 // anchor and switches to stateCommentComposer.
 func (m *model) enterCommentComposer(a commentAnchor) {
 	m.commentAnchor = a
 	m.commentTa.Reset()
-	if a.editing && a.editingIdx >= 0 && a.editingIdx < len(m.comments) {
-		m.commentTa.SetValue(m.comments[a.editingIdx].Text)
-	}
 	m.commentTa.Focus()
 	m.nav = render.NavState{}
 	m.state = stateCommentComposer
@@ -473,7 +472,6 @@ func (m *model) saveComment() {
 		src = bsrc[cs:ce]
 	}
 	c := render.Comment{
-		Kind:      m.blocks[idx].Kind,
 		BlockIdx:  idx,
 		CharStart: cs,
 		CharEnd:   ce,
@@ -481,14 +479,7 @@ func (m *model) saveComment() {
 		Text:      text,
 		CreatedAt: time.Now(),
 	}
-	if m.commentAnchor.editing {
-		if i := m.commentAnchor.editingIdx; i >= 0 && i < len(m.comments) {
-			c.CreatedAt = m.comments[i].CreatedAt // preserve original timestamp on edit
-			m.comments[i] = c
-		}
-	} else {
-		m.comments = append(m.comments, c)
-	}
+	m.comments = append(m.comments, c)
 	m.commentTa.Blur()
 	m.state = stateNav
 	m.reflow()
@@ -551,8 +542,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case render.ActionExitVisual:
 			m.refreshViewport()
 		case render.ActionComment:
-			a := m.buildCommentAnchor()
-			m.enterCommentComposer(a)
+			m.enterCommentComposer(buildCommentAnchor(&m.nav, &m.cursor, &m.selection, m.blocks))
 		case render.ActionSend:
 			m.handleSend()
 		case render.ActionRefresh:
@@ -575,24 +565,23 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // buildCommentAnchor assembles the (block, charA, charC) for the next
 // comment. With an active selection, anchor is the selection range;
 // otherwise anchor covers the whole block at the cursor.
-func (m *model) buildCommentAnchor() commentAnchor {
-	if m.nav.Visual == render.NavLine {
-		idx := m.selection.BlockIdx
-		if idx < 0 || idx >= len(m.blocks) {
-			idx = m.cursor.BlockIdx
+func buildCommentAnchor(st *render.NavState, cur *render.NavCursor, sel *render.NavSelection, blocks []render.Block) commentAnchor {
+	if st.Visual == render.NavLine {
+		idx := sel.BlockIdx
+		if idx < 0 || idx >= len(blocks) {
+			idx = cur.BlockIdx
 		}
-		a, c := m.selection.CharA, m.selection.CharC
+		a, c := sel.CharA, sel.CharC
 		if a > c {
 			a, c = c, a
 		}
 		return commentAnchor{blockIdx: idx, charA: a, charC: c}
 	}
-	idx := m.cursor.BlockIdx
-	if idx < 0 || idx >= len(m.blocks) {
+	idx := cur.BlockIdx
+	if idx < 0 || idx >= len(blocks) {
 		return commentAnchor{blockIdx: -1, charA: -1, charC: -1}
 	}
-	src := m.blocks[idx].Source
-	return commentAnchor{blockIdx: idx, charA: 0, charC: len(src)}
+	return commentAnchor{blockIdx: idx, charA: 0, charC: len(blocks[idx].Source)}
 }
 
 // handleSend is the universal `s` dispatch. In nav it batch-sends
@@ -611,15 +600,7 @@ func (m *model) handleSend() {
 		if m.includeComments && len(m.comments) > 0 {
 			text += "\n\n---\n" + render.FormatCommentsAppendix(m.comments, m.blocks)
 		}
-		if m.hist != nil {
-			_ = m.hist.Append(string(session.RoleUser), text)
-		}
-		if err := sendToPane(m.pane, text); err != nil {
-			m.latest = session.Message{
-				Role: session.RoleUser, Text: "[send failed: " + err.Error() + "]",
-			}
-			m.refreshViewport()
-			m.viewport.GotoBottom()
+		if !m.dispatch(text) {
 			return
 		}
 		m.state = stateNav
@@ -729,16 +710,7 @@ func (m model) ShortHelp() []key.Binding {
 // ordering the short view picks from, so adding a binding to a group
 // here also surfaces it in the long view.
 func (m model) FullHelp() [][]key.Binding {
-	return helpGroupsForState(m.state)
-}
-
-// helpGroups returns the per-state help binding groups for the
-// expanded (full) help view. The model passes this list straight
-// through FullHelp() — no per-group wrapper struct is needed since
-// the column title was unused (kept only as "in case we want labels
-// later", per the original comment).
-func helpGroupsForState(s state) [][]key.Binding {
-	switch s {
+	switch m.state {
 	case statePicking:
 		return [][]key.Binding{
 			{defaultKeyMap.Up, defaultKeyMap.Down},
@@ -799,8 +771,8 @@ func (m *model) refreshViewport() {
 		m.viewport.SetContent(placeholderStyle.Render(placeholderText))
 		return
 	}
-	// Ponytail: RenderMessageWithComments is a strict superset; for
-	// zero comments it returns the same output as RenderMessage.
+	// RenderMessageWithComments is a strict superset of renderBlocks;
+	// for zero comments it returns the same output.
 	rendered, blocks := render.RenderMessageWithComments(m.latest.Text, m.width, m.comments)
 	if rendered == "" {
 		// Renderer rejected this width (very narrow terminal): plain-text fallback.
@@ -808,24 +780,11 @@ func (m *model) refreshViewport() {
 		return
 	}
 	m.blocks = blocks
-	m.viewport.SetContent(m.injectGutter(rendered))
-}
-
-// focusedBlockIdx returns the block index that should carry the
-// highlight. With the single-cursor model, the cursor's blockIdx
-// drives the highlight in all states (visual or not).
-func (m *model) focusedBlockIdx() int {
-	if m.cursor.BlockIdx >= 0 && m.cursor.BlockIdx < len(m.blocks) {
-		return m.cursor.BlockIdx
+	focused := m.cursor.BlockIdx
+	if focused < 0 || focused >= len(m.blocks) {
+		focused = render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
 	}
-	return render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
-}
-
-// injectGutter delegates to render.InjectGutter with the model's
-// focused-block decision. Thin wrapper so the gutter logic lives in
-// one place (render package) where it can be tested without a model.
-func (m *model) injectGutter(rendered string) string {
-	return render.InjectGutter(rendered, m.blocks, m.focusedBlockIdx())
+	m.viewport.SetContent(render.InjectGutter(rendered, m.blocks, focused))
 }
 
 func (m model) View() string {
@@ -866,6 +825,20 @@ func (m model) View() string {
 	}
 }
 
+// padRight appends spaces so s reaches exactly width visible cells.
+// Returns s unchanged when width is non-positive or s already fills
+// the line.
+func padRight(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	pad := width - render.VisibleWidth(s)
+	if pad <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", pad)
+}
+
 // fillWidth pads every line of s to m.width so the rendered output
 // spans the full terminal. Before WindowSizeMsg fires, m.width is 0
 // and we return s unchanged.
@@ -878,10 +851,7 @@ func (m model) fillWidth(s string) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(line)
-		if pad := m.width - render.VisibleWidth(line); pad > 0 {
-			b.WriteString(strings.Repeat(" ", pad))
-		}
+		b.WriteString(padRight(line, m.width))
 	}
 	return b.String()
 }
@@ -946,11 +916,5 @@ func (m model) statusLine() string {
 	if m.nav.Visual == render.NavLine {
 		rendered += visualModeStyle.Render(" VISUAL ")
 	}
-	if m.width <= 0 {
-		return rendered
-	}
-	if pad := m.width - render.VisibleWidth(rendered); pad > 0 {
-		rendered += strings.Repeat(" ", pad)
-	}
-	return rendered
+	return padRight(rendered, m.width)
 }

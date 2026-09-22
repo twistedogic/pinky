@@ -1,13 +1,12 @@
 package main
 
 import (
-	"github.com/twistedogic/pinky/internal/render"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
 )
 
@@ -22,7 +21,7 @@ func TestView_PadsPickerToFullWidth(t *testing.T) {
 
 	view := m.View()
 	for _, line := range strings.Split(view, "\n") {
-		if w := visualLen(line); w != m.width {
+		if w := render.VisibleWidth(line); w != m.width {
 			t.Errorf("line width = %d want %d\n  line: %q", w, m.width, line)
 		}
 	}
@@ -39,15 +38,7 @@ func TestView_PadsStatusLineToFullWidth(t *testing.T) {
 	view := m.View()
 	lines := strings.Split(view, "\n")
 	last := lines[len(lines)-1]
-	if w := visualLen(last); w != m.width {
+	if w := render.VisibleWidth(last); w != m.width {
 		t.Errorf("status line width = %d want %d\n  line: %q", w, m.width, last)
 	}
 }
-
-// visualLen returns the visible (rune) count of s, ignoring ANSI.
-func visualLen(s string) int {
-	return render.VisibleWidth(s)
-}
-
-// silence unused import warning
-var _ tea.Model = model{}

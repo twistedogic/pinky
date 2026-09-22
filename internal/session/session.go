@@ -49,10 +49,8 @@ type Source interface {
 
 // OpenFile opens a Source from an explicit JSONL path. Used as the
 // --session-file escape hatch when pane-based discovery can't find the
-// file. The format is auto-detected: pi-style JSONL is parsed by
-// extractPi, codex-style JSONL by the codex parser; we pick whichever
-// produces a parseable first line. ponytail: a smarter detection could
-// sniff the first line; revisit if pi and codex diverge.
+// file. The format is auto-detected by the first line's `type` field
+// (pi uses "message", codex uses "response_item").
 func OpenFile(path string) (Source, error) {
 	f, err := os.Open(path)
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -124,9 +123,6 @@ func TestSessionMsg_AssistantOnlyPollSetsLatest(t *testing.T) {
 		t.Errorf("user-only poll should not change latest; got %q want %q", got.latest.Text, "existing")
 	}
 }
-
-// silence unused import warnings if any
-var _ tea.Model = model{}
 
 // TestSessionMsg_TextChangeClearsComments verifies that when the
 // latest message text changes, the comments slice is reset.

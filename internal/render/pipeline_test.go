@@ -20,7 +20,7 @@ func visibleLen(s string) int {
 // injection against a representative agent message.
 func TestPipeline_HeadingParaCode(t *testing.T) {
 	md := "# Setup\n\nRead the file and parse it.\n\n```\nfunc main() {}\n```\n"
-	rendered, blocks := RenderMessage(md, 80)
+	rendered, blocks := renderBlocks(md, 80)
 	if len(blocks) != 3 {
 		t.Fatalf("want 3 blocks, got %d", len(blocks))
 	}
@@ -40,7 +40,7 @@ func TestPipeline_HeadingParaCode(t *testing.T) {
 // Regression guard for the glamour margin compensation in NewRenderer.
 func TestPipeline_FillsWidth(t *testing.T) {
 	for _, w := range []int{40, 80, 120} {
-		rendered, _ := RenderMessage("# Title\n\nBody paragraph.\n", w)
+		rendered, _ := renderBlocks("# Title\n\nBody paragraph.\n", w)
 		for i, line := range strings.Split(rendered, "\n") {
 			if vw := visibleLen(line); vw > 0 && vw != w {
 				t.Errorf("width=%d: line %d width=%d (want %d)\n  line: %q",
@@ -51,7 +51,7 @@ func TestPipeline_FillsWidth(t *testing.T) {
 }
 
 func TestPipeline_EmptyMessage(t *testing.T) {
-	rendered, blocks := RenderMessage("", 80)
+	rendered, blocks := renderBlocks("", 80)
 	if rendered != "" {
 		t.Errorf("empty message should render empty, got %q", rendered)
 	}
@@ -62,7 +62,7 @@ func TestPipeline_EmptyMessage(t *testing.T) {
 
 func TestPipeline_BlockBoundariesNonOverlapping(t *testing.T) {
 	md := "# A\n\npara one\n\n## B\n\npara two\n\n- one\n- two\n- three\n"
-	_, blocks := RenderMessage(md, 80)
+	_, blocks := renderBlocks(md, 80)
 	for i := 0; i < len(blocks)-1; i++ {
 		if blocks[i].EndLine >= blocks[i+1].StartLine {
 			t.Errorf("block %d (lines %d-%d) overlaps block %d (lines %d-%d)",

@@ -84,6 +84,3 @@ func TestErrorState_QuitsOnCtrlC(t *testing.T) {
 		t.Errorf("state = %d want stateError", updated.(model).state)
 	}
 }
-
-// silence unused import
-var _ tea.Model = model{}

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/twistedogic/pinky/internal/session"
 )
@@ -47,6 +46,3 @@ func TestAttach_ViewportMatchesWindowWidth(t *testing.T) {
 		t.Errorf("viewportSize() width = %d want 120", w)
 	}
 }
-
-// silence unused import warnings
-var _ tea.Model = model{}
