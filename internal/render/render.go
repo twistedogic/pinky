@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	extensionAst "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/text"
 )
@@ -26,17 +27,19 @@ const (
 	BlockCode      BlockKind = "code"
 	BlockListItem  BlockKind = "list-item"
 	BlockQuote     BlockKind = "quote"
+	BlockTable     BlockKind = "table"
+	BlockDefList   BlockKind = "definition-list"
 )
 
 // Block is one navigable unit in a rendered agent message.
 //
 // StartLine and EndLine are 0-indexed line offsets in the concatenated
-// rendered output produced by RenderMessage. They are contiguous: blocks
+// rendered output produced by renderBlocks. They are contiguous: blocks
 // do not overlap, and consecutive blocks are joined back-to-back.
 //
 // HasComment is set true by RenderMessageWithComments when at least one
-// saved comment targets this block. RenderMessage leaves it false. The
-// flag drives the yellow left-gutter indicator in the rendered view.
+// saved comment targets this block. The flag drives the yellow left-
+// gutter indicator in the rendered view.
 type Block struct {
 	Kind       BlockKind
 	Source     string
@@ -134,14 +137,6 @@ func renderBlocks(md string, width int) (string, []Block) {
 	return buf.String(), blocks
 }
 
-// RenderMessage renders md block-by-block and returns the concatenated
-// rendered string plus the matching block index. The []Block return
-// value covers callers that only need navigation too — splitting out
-// a BuildBlockIndex helper would just duplicate the parse work.
-func RenderMessage(md string, width int) (string, []Block) {
-	return renderBlocks(md, width)
-}
-
 // CurrentBlockIdx returns the index of the block containing the given
 // viewport YOffset, or -1 if yOffset is outside any block (above the
 // first block or past the last).
@@ -155,37 +150,6 @@ func CurrentBlockIdx(blocks []Block, yOffset int) int {
 	for i, b := range blocks {
 		if yOffset >= b.StartLine && yOffset <= b.EndLine {
 			return i
-		}
-	}
-	return -1
-}
-
-// JumpBlock returns the StartLine of the block delta steps from
-// blocks[idx], or -1 if the jump goes out of range.
-//
-// delta == +1: next block; delta == -1: previous block.
-func JumpBlock(blocks []Block, idx, delta int) int {
-	next := idx + delta
-	if next < 0 || next >= len(blocks) {
-		return -1
-	}
-	return blocks[next].StartLine
-}
-
-// JumpHeading returns the StartLine of the heading block delta steps
-// from blocks[idx], or -1 if no such heading exists.
-func JumpHeading(blocks []Block, idx, delta int) int {
-	if delta > 0 {
-		for i := idx + 1; i < len(blocks); i++ {
-			if blocks[i].Kind == BlockHeading {
-				return blocks[i].StartLine
-			}
-		}
-		return -1
-	}
-	for i := idx - 1; i >= 0; i-- {
-		if blocks[i].Kind == BlockHeading {
-			return blocks[i].StartLine
 		}
 	}
 	return -1
@@ -244,14 +208,35 @@ func extract(node ast.Node, src []byte) []extracted {
 			out = append(out, extracted{kind: BlockListItem, source: "- " + s})
 		}
 		return out
+
+	case *extensionAst.Table:
+		// Whole table = one block. Glamour's renderer needs the
+		// header + alignment + body rows together for column
+		// alignment; splitting per row would break the visual.
+		s := blockText(n, src)
+		if strings.TrimSpace(s) == "" {
+			return nil
+		}
+		return []extracted{{kind: BlockTable, source: s}}
+
+	case *extensionAst.DefinitionList:
+		// Same reasoning as Table: glamour expects the whole list
+		// (terms + descriptions) for proper rendering. One block.
+		s := blockText(n, src)
+		if strings.TrimSpace(s) == "" {
+			return nil
+		}
+		return []extracted{{kind: BlockDefList, source: s}}
 	}
 	return nil
 }
 
 // blockText concatenates text content from a block node. For nodes
 // with their own Lines() (heading, paragraph, code block, blockquote)
-// it uses those. For container nodes (ListItem) it walks children and
-// concatenates their text. Empty nodes return "".
+// it uses those. For container nodes (ListItem) it walks children
+// and concatenates their text. For nodes with empty Lines() (GFM
+// Table, DefinitionList) it falls back to slicing src by Pos() and
+// the next sibling's Pos(). Empty nodes return "".
 func blockText(node ast.Node, src []byte) string {
 	if _, ok := node.(*ast.ListItem); ok {
 		var b strings.Builder
@@ -261,12 +246,26 @@ func blockText(node ast.Node, src []byte) string {
 		return b.String()
 	}
 	lines := node.Lines()
-	var b strings.Builder
-	for i := 0; i < lines.Len(); i++ {
-		seg := lines.At(i)
-		b.Write(seg.Value(src))
+	if lines.Len() > 0 {
+		var b strings.Builder
+		for i := 0; i < lines.Len(); i++ {
+			seg := lines.At(i)
+			b.Write(seg.Value(src))
+		}
+		return b.String()
 	}
-	return b.String()
+	// Fallback: derive byte range from Pos() to next sibling's Pos().
+	// Goldmark's GFM Table and DefinitionList AST nodes have empty
+	// Lines() but reliable Pos() values.
+	start := node.Pos()
+	if start < 0 {
+		start = 0
+	}
+	end := len(src)
+	if next := node.NextSibling(); next != nil && next.Pos() >= 0 {
+		end = next.Pos()
+	}
+	return string(src[start:end])
 }
 
 func lineCount(s string) int {
@@ -292,7 +291,6 @@ func lineCount(s string) int {
 // comments (so the redirect appendix can quote the snippet without
 // re-parsing). For block-level comments Source is empty.
 type Comment struct {
-	Kind      BlockKind // kind of the block this comment annotates
 	BlockIdx  int
 	CharStart int
 	CharEnd   int

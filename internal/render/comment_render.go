@@ -99,16 +99,12 @@ func footnoteLines(blocks []Block, comments []Comment) []footnote {
 		}
 		marker := c.Marker()
 		inline := c.CharStart >= 0
-		excerpt := c.Source
-		if len(excerpt) > 40 {
-			excerpt = excerpt[:40] + "…"
-		}
 		out = append(out, footnote{
 			lineIdx: insertAt,
 			marker:  marker,
 			body:    c.Text,
 			inline:  inline,
-			excerpt: excerpt,
+			excerpt: truncate(c.Source, excerptLimit),
 		})
 	}
 	return out

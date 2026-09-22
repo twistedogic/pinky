@@ -11,7 +11,7 @@ func TestBuildBlockIndex_MultiBlockMessage(t *testing.T) {
 A short paragraph.
 
 ` + "```go\nfunc main() {}\n```"
-	_, blocks := RenderMessage(md, 80)
+	_, blocks := renderBlocks(md, 80)
 	if len(blocks) != 3 {
 		t.Fatalf("len(blocks)=%d want 3 (got %+v)", len(blocks), blocks)
 	}
@@ -29,7 +29,7 @@ func TestBuildBlockIndex_ListItemsIndividual(t *testing.T) {
 - gamma
 - delta
 - epsilon`
-	_, blocks := RenderMessage(md, 80)
+	_, blocks := renderBlocks(md, 80)
 	if len(blocks) != 5 {
 		t.Fatalf("len(blocks)=%d want 5 (got %+v)", len(blocks), blocks)
 	}
@@ -46,7 +46,7 @@ func TestBuildBlockIndex_EmptyParagraphSkipped(t *testing.T) {
 First paragraph.
 
 Second paragraph.`
-	_, blocks := RenderMessage(md, 80)
+	_, blocks := renderBlocks(md, 80)
 	// Expected: heading, paragraph (first), paragraph (second).
 	// Empty paragraph between title and first paragraph is dropped.
 	if len(blocks) != 3 {
@@ -69,7 +69,7 @@ para one
 ## B
 
 para two`
-	_, blocks := RenderMessage(md, 80)
+	_, blocks := renderBlocks(md, 80)
 	for i := 0; i < len(blocks)-1; i++ {
 		if blocks[i].EndLine+1 != blocks[i+1].StartLine {
 			t.Errorf("blocks[%d] ends at %d, blocks[%d] starts at %d (not contiguous)",
@@ -81,7 +81,7 @@ para two`
 func TestBuildBlockIndex_StartAtZero(t *testing.T) {
 	md := `first block
 second block`
-	_, blocks := RenderMessage(md, 80)
+	_, blocks := renderBlocks(md, 80)
 	if len(blocks) == 0 {
 		t.Fatal("expected blocks")
 	}
@@ -93,89 +93,8 @@ second block`
 // Helpers for navigation tests below.
 func mustBuild(t *testing.T, md string, width int) []Block {
 	t.Helper()
-	_, b := RenderMessage(md, width)
+	_, b := renderBlocks(md, width)
 	return b
-}
-
-func lines(n int) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = ""
-	}
-	return out
-}
-
-func TestJumpBlock_Next(t *testing.T) {
-	md := `# A
-
-para one
-
-## B
-
-para two`
-	blocks := mustBuild(t, md, 80)
-	// From line 0 (in block 0, heading A), jumpBlock(+1) → first line of block 1.
-	if got := JumpBlock(blocks, 0, 1); got != blocks[1].StartLine {
-		t.Errorf("JumpBlock(+1) from 0 = %d want %d", got, blocks[1].StartLine)
-	}
-}
-
-func TestJumpBlock_Previous(t *testing.T) {
-	md := `# A
-
-para one
-
-## B
-
-para two`
-	blocks := mustBuild(t, md, 80)
-	// From block 2 (heading B), jumpBlock(-1) → first line of block 1.
-	if got := JumpBlock(blocks, 2, -1); got != blocks[1].StartLine {
-		t.Errorf("JumpBlock(-1) from 2 = %d want %d", got, blocks[1].StartLine)
-	}
-}
-
-func TestJumpBlock_NoOpAtBoundary(t *testing.T) {
-	md := `# A
-
-para one`
-	blocks := mustBuild(t, md, 80)
-	// JumpBlock(+1) from the last block returns -1.
-	if got := JumpBlock(blocks, len(blocks)-1, 1); got != -1 {
-		t.Errorf("JumpBlock(+1) from last = %d want -1", got)
-	}
-	// JumpBlock(-1) from the first block returns -1.
-	if got := JumpBlock(blocks, 0, -1); got != -1 {
-		t.Errorf("JumpBlock(-1) from 0 = %d want -1", got)
-	}
-}
-
-func TestJumpHeading_SkipsNonHeadings(t *testing.T) {
-	md := `# A
-
-para one
-
-## B
-
-para two`
-	blocks := mustBuild(t, md, 80)
-	// From block 1 (paragraph), JumpHeading(+1) → block 2 (heading B).
-	if got := JumpHeading(blocks, 1, 1); got != blocks[2].StartLine {
-		t.Errorf("JumpHeading(+1) from para = %d want %d", got, blocks[2].StartLine)
-	}
-	// From block 3 (paragraph two), JumpHeading(-1) → block 2 (heading B).
-	if got := JumpHeading(blocks, 3, -1); got != blocks[2].StartLine {
-		t.Errorf("JumpHeading(-1) from para = %d want %d", got, blocks[2].StartLine)
-	}
-}
-
-func TestJumpHeading_NoHeadings(t *testing.T) {
-	md := `just a paragraph
-another line`
-	blocks := mustBuild(t, md, 80)
-	if got := JumpHeading(blocks, 0, 1); got != -1 {
-		t.Errorf("JumpHeading with no headings = %d want -1", got)
-	}
 }
 
 func TestCurrentBlockIdx(t *testing.T) {
@@ -252,6 +171,100 @@ para two`
 	}
 }
 
-// Suppress unused warnings for test helpers.
-var _ = lines
+// _ = strings keeps the import until/unless more tests need it.
 var _ = strings.TrimSpace
+
+// TestRender_TableCellsAppearInOutput: a GFM table in the input
+// must reach the rendered output. Regression test for the silent
+// drop where extract() had no case for *ast.Table; without the
+// fix, no cell text and no pipe characters appear anywhere.
+func TestRender_TableCellsAppearInOutput(t *testing.T) {
+	md := `# heading
+
+| col1 | col2 |
+|------|------|
+| a    | b    |
+| c    | d    |
+
+trailing paragraph
+`
+	rendered, blocks := renderBlocks(md, 80)
+	plain := stripANSI(rendered)
+	for _, want := range []string{"col1", "col2", "a", "b", "c", "d"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("table cell %q missing from rendered output:\n%s", want, plain)
+		}
+	}
+	// Sanity: the surrounding blocks still produced.
+	if len(blocks) < 3 {
+		t.Errorf("expected >=3 blocks (heading, table, paragraph), got %d", len(blocks))
+	}
+}
+
+// TestExtract_TableRecognized: a GFM table parses to exactly one
+// block with Kind == BlockTable. Guards the AST-handler addition.
+func TestExtract_TableRecognized(t *testing.T) {
+	md := `| col1 | col2 |
+|------|------|
+| a    | b    |
+`
+	_, blocks := renderBlocks(md, 80)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d (%+v)", len(blocks), blocks)
+	}
+	if blocks[0].Kind != BlockTable {
+		t.Errorf("blocks[0].Kind = %s want %s", blocks[0].Kind, BlockTable)
+	}
+}
+
+// TestRender_TableBetweenBlocks: a table sandwiched between a
+// heading and a paragraph produces three blocks with contiguous
+// line ranges. Guards the spec scenario "Table sits cleanly
+// between adjacent blocks".
+func TestRender_TableBetweenBlocks(t *testing.T) {
+	md := `# heading
+
+| col1 | col2 |
+|------|------|
+| a    | b    |
+
+trailing paragraph
+`
+	_, blocks := renderBlocks(md, 80)
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d (%+v)", len(blocks), blocks)
+	}
+	kinds := []BlockKind{blocks[0].Kind, blocks[1].Kind, blocks[2].Kind}
+	wantKinds := []BlockKind{BlockHeading, BlockTable, BlockParagraph}
+	for i, k := range kinds {
+		if k != wantKinds[i] {
+			t.Errorf("block %d Kind = %s want %s", i, k, wantKinds[i])
+		}
+	}
+	for i := 0; i < len(blocks)-1; i++ {
+		if blocks[i].EndLine+1 != blocks[i+1].StartLine {
+			t.Errorf("blocks[%d] ends at %d, blocks[%d] starts at %d (not contiguous)",
+				i, blocks[i].EndLine, i+1, blocks[i+1].StartLine)
+		}
+	}
+}
+
+// TestExtract_DefinitionListRecognized: a GFM definition list
+// parses to exactly one block with Kind == BlockDefList. Same
+// root cause as tables (extension.DefinitionList is enabled but
+// *ast.DefinitionList was unhandled by extract()).
+func TestExtract_DefinitionListRecognized(t *testing.T) {
+	md := `Term 1
+:   Definition 1
+
+Term 2
+:   Definition 2
+`
+	_, blocks := renderBlocks(md, 80)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d (%+v)", len(blocks), blocks)
+	}
+	if blocks[0].Kind != BlockDefList {
+		t.Errorf("blocks[0].Kind = %s want %s", blocks[0].Kind, BlockDefList)
+	}
+}
