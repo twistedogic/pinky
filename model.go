@@ -417,14 +417,16 @@ func (m *model) enterCommentComposer(a commentAnchor) {
 }
 
 // handleCommentComposerKey processes a keypress in stateCommentComposer.
-// Ctrl+S saves the comment, Esc cancels.
+// Enter saves the new comment and dispatches every accumulated comment
+// in one batch via submitAllComments; Esc cancels.
 func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.cancelCommentComposer()
 		return m, nil
-	case tea.KeyCtrlS:
+	case tea.KeyEnter:
 		m.saveComment()
+		m.submitAllComments()
 		return m, nil
 	}
 	var taCmd tea.Cmd

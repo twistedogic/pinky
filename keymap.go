@@ -27,11 +27,11 @@ type keyMap struct {
 	// Compose
 	Newline         key.Binding // enter
 	Cancel          key.Binding // esc
-	IncludeComments key.Binding // ctrl+i
+	IncludeComments key.Binding // i
 
-	// Comment composer (uses Ctrl+S for save, Esc for cancel; the
-	// composer is a multi-line textarea so `s` is a literal there).
-	SaveComment key.Binding // ctrl+s
+	// Comment composer (Enter saves, Esc cancels; single-line so
+	// `s` and other nav runes are literal text in the buffer).
+	SaveComment key.Binding // enter
 
 	// Error
 	QuitError key.Binding // any key
@@ -78,14 +78,15 @@ var defaultKeyMap = keyMap{
 		key.WithHelp("esc", "cancel"),
 	),
 	IncludeComments: key.NewBinding(
-		key.WithKeys("ctrl+i"),
-		key.WithHelp("^I", "include comments"),
+		key.WithKeys("i"),
+		key.WithHelp("i", "include comments"),
 	),
 
-	// Comment composer
+	// Comment composer (Enter saves the new comment AND sends every
+// accumulated comment in one batch via the inject pipeline).
 	SaveComment: key.NewBinding(
-		key.WithKeys("ctrl+s"),
-		key.WithHelp("^S", "save"),
+		key.WithKeys("enter"),
+		key.WithHelp("⏎", "save & send all"),
 	),
 
 	// Error

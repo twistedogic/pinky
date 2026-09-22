@@ -13,9 +13,9 @@ back into the agent's input.
 │                          │   message rendered as   │
 │                          │   markdown              │
 │                          │                         │
-│                          │   ─ compose (Ctrl+N) ─  │
+│                          │   ─ compose (n) ─       │
 │                          │   multi-line input      │
-│   agent input ▌          │   Ctrl+S to send        │
+│   agent input ▌          │   s to send             │
 └──────────────────────────┴─────────────────────────┘
 ```
 
@@ -27,9 +27,9 @@ back into the agent's input.
 │                          │   last message + your   │
 │                          │   redirects             │
 │                          │                         │
-│                          │   ─ compose (Ctrl+N) ─  │
+│                          │   ─ compose (n) ─       │
 │                          │   multi-line input      │
-│   agent input ▌          │   Ctrl+S to send        │
+│   agent input ▌          │   s to send             │
 └──────────────────────────┴─────────────────────────┘
 ```
 
@@ -124,40 +124,56 @@ always shown unless `--target` is passed.
 
 ## Keys
 
-| Key | Action |
-|---|---|
-| `Ctrl+N` | Enter compose mode |
-| `c` | Enter compose mode (vim-style alias) |
-| `Enter` | Newline (in compose) |
-| `Ctrl+S` | Send the redirect to the agent |
-| `Esc` | Cancel compose |
-| `Ctrl+R` | Re-poll the agent session |
-| `q` | Quit (idle and picker states) |
-| `Ctrl+C` | Quit |
-| `?` | Toggle keymap page (markdown-rendered in the viewport) |
+### Nav (the main view)
 
 The main view shows the latest complete agent message as rendered
 markdown. Within that message:
 
 | Key | Action |
 |---|---|
-| `j` / `k` | Line down / up |
-| `}` / `{` | Next / previous block |
-| `]]` / `[[` | Next / previous heading |
-| `gg` | Top of message |
-| `G` | Bottom of message |
-| `PgUp` | Top of message |
-| `PgDn` | Next block |
-| `↑` / `↓` | Aliases for `j` / `k` |
+| `j` / `↓` | Next block |
+| `k` / `↑` | Previous block |
+| `h` / `l` | Move one rune left / right inside the current block |
+| `v` | Enter visual mode (toggle; `v` again exits) |
+| `Esc` | Exit visual mode |
+| `c` | Open the comment composer (anchored to selection, or whole block) |
+| `s` | Send any pending comments (retry path after a failed send) |
+| `n` | Enter compose mode |
+| `r` | Re-poll the agent session |
+| `q` / `Ctrl+C` | Quit |
+| `?` | Toggle the keymap page |
 
-In the picker:
+### Compose
 
 | Key | Action |
 |---|---|
-| `j` / `k` | Move selection (alias for `↓` / `↑`) |
+| `Enter` | Newline |
+| `i` | Toggle "include comments" appendix on the next send |
+| `s` | Send the redirect (appends comments appendix when toggle is on) |
+| `Esc` | Cancel and return to nav |
+| `?` | Toggle the keymap page |
 
-The currently-focused block is marked by horizontal border lines above
-and below it.
+### Comment composer
+
+| Key | Action |
+|---|---|
+| `Enter` | Save comment and send all accumulated comments in one batch |
+| `Esc` | Cancel |
+
+### Picker
+
+| Key | Action |
+|---|---|
+| `↑` / `k` | Move selection up |
+| `↓` / `j` | Move selection down |
+| `Enter` | Select |
+| `q` | Quit |
+| `Ctrl+C` | Quit |
+
+The currently-focused block carries a cyan `▍` left-gutter on every
+rendered line within its `StartLine..EndLine` range; commented
+blocks additionally receive a yellow gutter tint and a footnote line
+below the block.
 
 ## History
 
