@@ -18,9 +18,58 @@ func TestFormatCommentsAppendix_SingleBlock(t *testing.T) {
 	blocks := []Block{{Kind: BlockParagraph, Source: "first line\nsecond line", StartLine: 0, EndLine: 2}}
 	comments := []Comment{{BlockIdx: 0, CharStart: -1, Text: "looks good", CreatedAt: time.Now()}}
 	got := FormatCommentsAppendix(comments, blocks)
-	for _, want := range []string{"---", "1 comments:", "block", "looks good"} {
+	for _, want := range []string{"---", "1 comment:", "block", "looks good"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("expected %q in appendix; got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "1 comments:") {
+		t.Errorf("singular label must not be plural; got %q", got)
+	}
+}
+
+// TestFormatCommentsAppendix_PluralLabel locks in the plural form
+// (regression guard for the singular fix above).
+func TestFormatCommentsAppendix_PluralLabel(t *testing.T) {
+	blocks := []Block{{Kind: BlockParagraph, Source: "x", StartLine: 0, EndLine: 1}}
+	comments := []Comment{
+		{BlockIdx: 0, CharStart: -1, Text: "a", CreatedAt: time.Now()},
+		{BlockIdx: 0, CharStart: -1, Text: "b", CreatedAt: time.Now().Add(time.Second)},
+	}
+	got := FormatCommentsAppendix(comments, blocks)
+	if !strings.Contains(got, "2 comments:") {
+		t.Errorf("plural: want '2 comments:' in output; got:\n%s", got)
+	}
+}
+
+// TestFormatCommentsAppendix_ExcerptFlattensNewlines locks in the
+// one-line-per-comment contract: a multi-line block source must not
+// leak raw newlines into the excerpt, which would break the format
+// (closing `"` on the wrong line).
+func TestFormatCommentsAppendix_ExcerptFlattensNewlines(t *testing.T) {
+	blocks := []Block{{Kind: BlockParagraph, Source: "first line\nsecond line\nthird line", StartLine: 0, EndLine: 4}}
+	comments := []Comment{{BlockIdx: 0, CharStart: -1, Text: "x", CreatedAt: time.Now()}}
+	got := FormatCommentsAppendix(comments, blocks)
+	// Header "\n\n---\n1 comment:\n" (4 newlines) + 1 comment line + trailing "\n"
+	// → 5 newlines. A raw-newline excerpt would push this higher.
+	if c := strings.Count(got, "\n"); c != 5 {
+		t.Errorf("expected 5 newlines (one comment line); got %d:\n%q", c, got)
+	}
+	// Find the comment line and verify it's single-line with all
+	// source lines flattened.
+	var commentLine string
+	for _, l := range strings.Split(got, "\n") {
+		if strings.HasPrefix(l, "- block") {
+			commentLine = l
+			break
+		}
+	}
+	if commentLine == "" {
+		t.Fatalf("no - block line in output:\n%s", got)
+	}
+	for _, want := range []string{"first line", "second line", "third line"} {
+		if !strings.Contains(commentLine, want) {
+			t.Errorf("comment line missing flattened %q; got: %q", want, commentLine)
 		}
 	}
 }

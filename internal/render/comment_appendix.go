@@ -33,8 +33,14 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 	})
 	var b strings.Builder
 	b.WriteString("\n\n---\n")
+	label := "comments"
+	if len(sorted) == 1 {
+		label = "comment"
+	}
 	b.WriteString(strconv.Itoa(len(sorted)))
-	b.WriteString(" comments:\n")
+	b.WriteString(" ")
+	b.WriteString(label)
+	b.WriteString(":\n")
 	for _, c := range sorted {
 		marker := "block"
 		if c.CharStart >= 0 {
@@ -46,6 +52,10 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 		} else if c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
 			excerpt = blocks[c.BlockIdx].Source
 		}
+		excerpt = strings.TrimSpace(excerpt)
+		// Flatten newlines/tabs so the excerpt stays on one line —
+		// the appendix contract is "- marker \"excerpt\" (lines): text\n".
+		excerpt = strings.NewReplacer("\n", " ", "\t", " ").Replace(excerpt)
 		excerpt = strings.TrimSpace(excerpt)
 		if len(excerpt) > 40 {
 			excerpt = excerpt[:40] + "…"

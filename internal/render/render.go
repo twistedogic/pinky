@@ -46,7 +46,6 @@ type Block struct {
 }
 
 // NewRenderer returns a glamour TermRenderer configured for pinky.
-// ponytail: cached by width at the call site; revisit if memory grows.
 //
 // The pinky style lives in style.go and uses the same color family
 // as the lipgloss TUI (51 cyan selection, 228 yellow comments,
@@ -67,6 +66,28 @@ func NewRenderer(width int) (*glamour.TermRenderer, error) {
 	)
 }
 
+// cachedRenderer holds the last-built glamour renderer keyed by width.
+// tea.Update is single-threaded so no mutex is needed. Width only
+// changes on terminal resize, so cache hit rate in steady state is
+// ~100%; glamour setup is heavy (style parse + chroma).
+var cachedRenderer struct {
+	width int
+	r     *glamour.TermRenderer
+}
+
+func cachedRendererFor(width int) (*glamour.TermRenderer, error) {
+	if cachedRenderer.r != nil && cachedRenderer.width == width {
+		return cachedRenderer.r, nil
+	}
+	r, err := NewRenderer(width)
+	if err != nil {
+		return nil, err
+	}
+	cachedRenderer.r = r
+	cachedRenderer.width = width
+	return r, nil
+}
+
 // renderBlocks parses md and renders each non-empty top-level block
 // (heading, paragraph, code block, list item, blockquote). Empty
 // paragraphs, thematic breaks, and HTML blocks are dropped. Each
@@ -74,7 +95,7 @@ func NewRenderer(width int) (*glamour.TermRenderer, error) {
 // string; the []Block index carries (Kind, Source, line range) into
 // that output.
 func renderBlocks(md string, width int) (string, []Block) {
-	r, err := NewRenderer(width)
+	r, err := cachedRendererFor(width)
 	if err != nil {
 		return md, nil
 	}

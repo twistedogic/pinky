@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -380,13 +381,8 @@ func flatBindings(groups [][]key.Binding) []key.Binding {
 	return out
 }
 
-// errTestBoom is a stand-in error for tests; avoids importing errors
-// just for one line.
-var errTestBoom = errorString("boom")
-
-type errorString string
-
-func (e errorString) Error() string { return string(e) }
+// errTestBoom is a stand-in error for tests.
+var errTestBoom = errors.New("boom")
 
 // lineAt returns the i-th line of plain (0-indexed). Returns "" if i
 // is out of range. Used by visual-mode tests to assert per-line

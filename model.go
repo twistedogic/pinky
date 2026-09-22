@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"time"
 
@@ -77,7 +76,7 @@ type model struct {
 	streaming bool
 
 	// Comments slice (block + inline). Lives on the model; cleared
-	// when msgHash flips or attach() runs.
+	// when the latest message text changes or attach() runs.
 	comments []render.Comment
 
 	// cursor is the single nav pointer. BlockIdx into m.blocks;
@@ -88,10 +87,6 @@ type model struct {
 	selection render.NavSelection
 	// nav is the nav state machine state.
 	nav render.NavState
-
-	// msgHash is a short fingerprint of latest.Text; flips when the
-	// assistant message content changes, which triggers a comment reset.
-	msgHash string
 
 	// includeComments toggles whether the next redirect will append
 	// the comments appendix. Toggled by Ctrl+I in compose mode.
@@ -121,15 +116,7 @@ type model struct {
 // newModel returns a picker model. Callers must either call setAgents
 // (then run the picker) or call attach (skip the picker, jump to running).
 
-// commentHash returns a short fingerprint of text. Used to detect when
-// the assistant message has changed so we can clear stale comments.
-// FNV-1a 32-bit, hex-encoded — collision-resistant enough for a
-// per-session fingerprint (8 hex chars = 32 bits).
-func commentHash(text string) string {
-	h := fnv.New32a()
-	h.Write([]byte(text))
-	return fmt.Sprintf("%08x", h.Sum32())
-}
+
 
 // cursorOnScreen returns true when the cursor's rendered line is
 // within the viewport's visible range.
@@ -191,7 +178,7 @@ func (m *model) viewportSize() (int, int) {
 }
 
 // idle is the shared tail of attach/attachWithFile: the view setup
-// (placeholder seed, textareas, comment slice, msgHash) once source +
+// (placeholder seed, textareas, comment slice) once source +
 // history are resolved. ponytail: pull the shared 25 lines out so the
 // two entry points only have to source/resolve before calling.
 func (m *model) idle(src session.Source, hist *history.History, pane string) {
@@ -212,7 +199,6 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	m.refreshViewport()
 	m.initCommentComposer()
 	m.comments = nil
-	m.msgHash = commentHash(m.latest.Text)
 }
 
 // attach opens a session source + history for the given pane.
@@ -266,15 +252,7 @@ func pollCmd(src session.Source) tea.Cmd {
 		if err != nil {
 			return sessionMsg{err: err}
 		}
-		var entries []session.Message
-		for _, m := range msgs {
-			role := session.RoleAssistant
-			if m.Role == session.RoleUser {
-				role = session.RoleUser
-			}
-			entries = append(entries, session.Message{Role: role, Text: m.Text})
-		}
-		return sessionMsg{entries: entries}
+		return sessionMsg{entries: msgs}
 	})
 }
 
@@ -309,10 +287,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if last != nil {
-			h := commentHash(last.Text)
-			if h != m.msgHash {
+			if last.Text != m.latest.Text {
 				m.comments = nil
-				m.msgHash = h
 			}
 			m.latest = *last
 		}

@@ -16,10 +16,6 @@ type footnote struct {
 	excerpt string
 }
 
-// commentTint is the lipgloss style applied to lines inside a
-// commented block's range. Background-only so the foreground colors
-// of glamour's output are preserved.
-
 // tintLine wraps a rendered line in a background-fill ANSI sequence
 // (the lipgloss styles drop the background when the input already
 // carries foreground color codes, which glamour's output always does).
@@ -130,14 +126,14 @@ func applyHighlights(rendered string, blocks []Block, comments []Comment, width 
 	}
 	// Build the set of (start, end) line ranges (relative to the
 	// pre-footnote rendered output) per block.
-	type range_ struct{ start, end int }
-	rangeByBlock := make(map[int]range_, len(blocks))
+	type lineRange struct{ start, end int }
+	rangeByBlock := make(map[int]lineRange, len(blocks))
 	for _, c := range comments {
 		s, e := RenderedLineRange(blocks, c.BlockIdx, c.CharStart, c.CharEnd)
 		if cur, ok := rangeByBlock[c.BlockIdx]; !ok || s < cur.start {
-			rangeByBlock[c.BlockIdx] = range_{start: s, end: e}
+			rangeByBlock[c.BlockIdx] = lineRange{start: s, end: e}
 		} else {
-			rangeByBlock[c.BlockIdx] = range_{start: cur.start, end: e}
+			rangeByBlock[c.BlockIdx] = lineRange{start: cur.start, end: e}
 		}
 	}
 	lines := strings.Split(rendered, "\n")
