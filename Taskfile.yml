@@ -1,0 +1,35 @@
+version: '3'
+
+vars:
+  GOFLAGS: '-trimpath'
+
+tasks:
+  default:
+    cmds:
+      - task: check
+
+  build:
+    desc: Build the binary
+    cmds:
+      - go build {{.GOFLAGS}} -o pinky .
+
+  test:
+    desc: Run the test suite
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Run vet + tests
+    cmds:
+      - task: vet
+      - task: test
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
