@@ -8,8 +8,10 @@ import (
 // nav keys are matched by handleNavKey reading the rune directly —
 // the bindings here are only consumed by key.Matches() for keys that
 // the nav state machine doesn't own (compose, comment-composer, error
-// dismissal, include-comments toggle). The Nav binding group exists
-// purely to populate the FullHelp view.
+// dismissal, include-comments toggle). Each nav binding is a separate
+// key.Binding so the help overlay can render one row per key with a
+// per-key description (instead of collapsing every nav key into one
+// undifferentiated row).
 type keyMap struct {
 	// Shared
 	Help key.Binding // ?
@@ -20,17 +22,25 @@ type keyMap struct {
 	Pick     key.Binding // enter
 	QuitPick key.Binding // q
 
-	// Nav (single-letter surface per design D2; group rendered for
-	// the help overlay only — handleNavKey matches runes directly).
-	NavGroup key.Binding // j k h l v Esc c s q r n
+	// Nav — help-overlay only; rune matching lives in handleNavKey.
+	NavBlockDown key.Binding // j, ↓
+	NavBlockUp   key.Binding // k, ↑
+	NavRuneLeft  key.Binding // h
+	NavRuneRight key.Binding // l
+	NavVisual    key.Binding // v
+	NavComment   key.Binding // c
+	NavSend      key.Binding // s
+	NavCompose   key.Binding // n
+	NavRefresh   key.Binding // r
+	NavQuit      key.Binding // q
 
 	// Compose
 	Newline         key.Binding // enter
 	Cancel          key.Binding // esc
 	IncludeComments key.Binding // i
 
-	// Comment composer (Enter saves, Esc cancels; single-line so
-	// `s` and other nav runes are literal text in the buffer).
+	// Comment composer (Enter saves the new comment AND sends every
+	// accumulated comment in one batch via the inject pipeline).
 	SaveComment key.Binding // enter
 
 	// Error
@@ -63,9 +73,45 @@ var defaultKeyMap = keyMap{
 	),
 
 	// Nav — help-overlay only; rune matching lives in handleNavKey.
-	NavGroup: key.NewBinding(
-		key.WithKeys("j", "k", "h", "l", "v", "esc", "c", "s", "q", "r", "n"),
-		key.WithHelp("nav", "j k h l v c s q r n"),
+	NavBlockDown: key.NewBinding(
+		key.WithKeys("j", "down"),
+		key.WithHelp("j/↓", "next block"),
+	),
+	NavBlockUp: key.NewBinding(
+		key.WithKeys("k", "up"),
+		key.WithHelp("k/↑", "previous block"),
+	),
+	NavRuneLeft: key.NewBinding(
+		key.WithKeys("h"),
+		key.WithHelp("h", "rune left"),
+	),
+	NavRuneRight: key.NewBinding(
+		key.WithKeys("l"),
+		key.WithHelp("l", "rune right"),
+	),
+	NavVisual: key.NewBinding(
+		key.WithKeys("v"),
+		key.WithHelp("v", "visual mode"),
+	),
+	NavComment: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "comment composer"),
+	),
+	NavSend: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "send all comments"),
+	),
+	NavCompose: key.NewBinding(
+		key.WithKeys("n"),
+		key.WithHelp("n", "compose mode"),
+	),
+	NavRefresh: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "re-poll session"),
+	),
+	NavQuit: key.NewBinding(
+		key.WithKeys("q"),
+		key.WithHelp("q", "quit pinky"),
 	),
 
 	// Compose
@@ -83,7 +129,7 @@ var defaultKeyMap = keyMap{
 	),
 
 	// Comment composer (Enter saves the new comment AND sends every
-// accumulated comment in one batch via the inject pipeline).
+	// accumulated comment in one batch via the inject pipeline).
 	SaveComment: key.NewBinding(
 		key.WithKeys("enter"),
 		key.WithHelp("⏎", "save & send all"),

@@ -28,9 +28,11 @@ func TestHelp_AlwaysVisibleInIdleView(t *testing.T) {
 		t.Errorf("agent message should remain visible; got first 200 chars:\n%q",
 			plain[:min(len(plain), 200)])
 	}
-	// Short help includes the nav binding description.
-	if !strings.Contains(plain, "nav") {
-		t.Errorf("expected short help to mention 'nav' in idle view; got:\n%q",
+	// Short help surfaces the per-key nav descriptors (post
+	// NavGroup expansion: the nav bindings render as separate
+	// rows with their own descriptions).
+	if !strings.Contains(plain, "comment composer") {
+		t.Errorf("expected short help to surface nav bindings in idle view; got:\n%q",
 			plain)
 	}
 }
@@ -86,11 +88,10 @@ func TestHelp_QuestionMarkTogglesFullHelp(t *testing.T) {
 	}
 	view := got.View()
 	plain := stripANSI(view)
-	// Full help exposes the nav binding description. With the
-	// collapsed keymap the nav is one group; assert on the nav
-	// binding's full descriptor text.
-	if !strings.Contains(plain, "j k h l v c s q r n") {
-		t.Errorf("full help should surface the nav group's full descriptor; got:\n%q", plain)
+	// Full help exposes each nav key on its own row with a
+	// per-key descriptor (post NavGroup expansion).
+	if !strings.Contains(plain, "next block") || !strings.Contains(plain, "comment composer") {
+		t.Errorf("full help should surface per-key nav descriptors; got:\n%q", plain)
 	}
 }
 
@@ -293,7 +294,7 @@ func TestShortHelp_PerStateCurated(t *testing.T) {
 		wantMax int
 	}{
 		{statePicking, []string{"toggle help"}, 6},
-		{stateNav, []string{"nav", "toggle help"}, 6},
+		{stateNav, []string{"comment composer", "send all comments", "toggle help"}, 6},
 		{stateCompose, []string{"include comments", "cancel", "toggle help"}, 6},
 		{stateCommentComposer, []string{"save", "cancel"}, 4},
 		{stateError, []string{"dismiss"}, 3},
@@ -323,7 +324,7 @@ func TestFullHelp_CoversStateSpecificKeys(t *testing.T) {
 		wantIn []string
 	}{
 		{statePicking, []string{"up", "down", "select", "toggle help"}},
-		{stateNav, []string{"nav", "toggle help"}},
+		{stateNav, []string{"next block", "previous block", "comment composer", "send all comments", "toggle help"}},
 		{stateCompose, []string{"newline", "include comments", "cancel", "toggle help"}},
 		{stateCommentComposer, []string{"save", "cancel"}},
 	}

@@ -395,10 +395,10 @@ func (m *model) enterCompose() {
 // the redirect composer state isn't disturbed.
 func (m *model) initCommentComposer() {
 	ta := textarea.New()
-	ta.Placeholder = "comment — Enter newline, Ctrl+S save, Esc cancel"
+	ta.Placeholder = "comment — Esc cancel"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
-	ta.SetHeight(composeHeight)
+	ta.SetHeight(1)
 	m.commentTa = ta
 }
 
@@ -705,7 +705,8 @@ func (m model) ShortHelp() []key.Binding {
 		}
 	case stateNav:
 		return []key.Binding{
-			defaultKeyMap.NavGroup,
+			defaultKeyMap.NavComment,
+			defaultKeyMap.NavSend,
 			defaultKeyMap.Help,
 		}
 	case stateCompose:
@@ -747,8 +748,9 @@ func helpGroupsForState(s state) [][]key.Binding {
 		}
 	case stateNav:
 		return [][]key.Binding{
-			{defaultKeyMap.NavGroup},
-			{defaultKeyMap.Help},
+			{defaultKeyMap.NavBlockDown, defaultKeyMap.NavBlockUp, defaultKeyMap.NavRuneLeft, defaultKeyMap.NavRuneRight},
+			{defaultKeyMap.NavVisual, defaultKeyMap.NavComment, defaultKeyMap.NavSend, defaultKeyMap.NavCompose, defaultKeyMap.NavRefresh},
+			{defaultKeyMap.NavQuit, defaultKeyMap.Help},
 		}
 	case stateCompose:
 		return [][]key.Binding{
