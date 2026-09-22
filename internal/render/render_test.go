@@ -11,7 +11,7 @@ func TestBuildBlockIndex_MultiBlockMessage(t *testing.T) {
 A short paragraph.
 
 ` + "```go\nfunc main() {}\n```"
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	if len(blocks) != 3 {
 		t.Fatalf("len(blocks)=%d want 3 (got %+v)", len(blocks), blocks)
 	}
@@ -29,7 +29,7 @@ func TestBuildBlockIndex_ListItemsIndividual(t *testing.T) {
 - gamma
 - delta
 - epsilon`
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	if len(blocks) != 5 {
 		t.Fatalf("len(blocks)=%d want 5 (got %+v)", len(blocks), blocks)
 	}
@@ -46,7 +46,7 @@ func TestBuildBlockIndex_EmptyParagraphSkipped(t *testing.T) {
 First paragraph.
 
 Second paragraph.`
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	// Expected: heading, paragraph (first), paragraph (second).
 	// Empty paragraph between title and first paragraph is dropped.
 	if len(blocks) != 3 {
@@ -69,7 +69,7 @@ para one
 ## B
 
 para two`
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	for i := 0; i < len(blocks)-1; i++ {
 		if blocks[i].EndLine+1 != blocks[i+1].StartLine {
 			t.Errorf("blocks[%d] ends at %d, blocks[%d] starts at %d (not contiguous)",
@@ -81,7 +81,7 @@ para two`
 func TestBuildBlockIndex_StartAtZero(t *testing.T) {
 	md := `first block
 second block`
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	if len(blocks) == 0 {
 		t.Fatal("expected blocks")
 	}
@@ -93,7 +93,7 @@ second block`
 // Helpers for navigation tests below.
 func mustBuild(t *testing.T, md string, width int) []Block {
 	t.Helper()
-	_, b := renderBlocks(md, width)
+	_, b := renderBlocks(md)
 	return b
 }
 
@@ -135,7 +135,7 @@ para one
 ## B
 
 para two`
-	_, blocks := RenderMessageWithComments(md, 80, nil)
+	_, blocks := RenderMessageWithComments(md, nil)
 	if len(blocks) == 0 {
 		t.Fatal("expected blocks")
 	}
@@ -157,7 +157,7 @@ para one
 ## B
 
 para two`
-	_, blocks := RenderMessageWithComments(md, 80, []Comment{
+	_, blocks := RenderMessageWithComments(md, []Comment{
 		{BlockIdx: 1, CharStart: -1, CharEnd: -1, Text: "x"},
 	})
 	if len(blocks) < 2 {
@@ -188,7 +188,7 @@ func TestRender_TableCellsAppearInOutput(t *testing.T) {
 
 trailing paragraph
 `
-	rendered, blocks := renderBlocks(md, 80)
+	rendered, blocks := renderBlocks(md)
 	plain := stripANSI(rendered)
 	for _, want := range []string{"col1", "col2", "a", "b", "c", "d"} {
 		if !strings.Contains(plain, want) {
@@ -208,7 +208,7 @@ func TestExtract_TableRecognized(t *testing.T) {
 |------|------|
 | a    | b    |
 `
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	if len(blocks) != 1 {
 		t.Fatalf("expected 1 block, got %d (%+v)", len(blocks), blocks)
 	}
@@ -230,7 +230,7 @@ func TestRender_TableBetweenBlocks(t *testing.T) {
 
 trailing paragraph
 `
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	if len(blocks) != 3 {
 		t.Fatalf("expected 3 blocks, got %d (%+v)", len(blocks), blocks)
 	}
@@ -260,7 +260,7 @@ func TestExtract_DefinitionListRecognized(t *testing.T) {
 Term 2
 :   Definition 2
 `
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	if len(blocks) != 1 {
 		t.Fatalf("expected 1 block, got %d (%+v)", len(blocks), blocks)
 	}

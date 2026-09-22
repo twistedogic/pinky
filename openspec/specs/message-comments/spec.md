@@ -180,10 +180,8 @@ The system SHALL render saved comments as footnote lines
 immediately following the block they annotate. Each comment
 footnote SHALL be prefixed with a comment marker (`▸` for
 block-level comments, `•` for inline comments) and SHALL display
-the comment text. The rendered line range of the commented block
-SHALL also receive a background colour tint to make the commented
-region visually distinct. The commented block SHALL be marked in
-the left-margin gutter column with the character `▍` in yellow
+the comment text. The commented block SHALL be marked in the
+left-margin gutter column with the character `▍` in yellow
 (foreground colour `228`) on every rendered line that falls
 inside the block's `StartLine..EndLine` range, regardless of
 whether the block is currently focused. No first-line `▸` or `•`
@@ -218,13 +216,6 @@ the document body.
 - **THEN** the block's first rendered line does NOT begin with
   a `▸` or `•` glyph; the only annotation signal in the block
   body is the yellow gutter
-
-#### Scenario: Background tint on commented lines
-
-- **WHEN** a block has at least one comment
-- **THEN** every rendered line within that block's
-  `StartLine..EndLine` range receives the comment background
-  colour tint
 
 ### Requirement: In-memory storage only
 
@@ -303,25 +294,13 @@ the cyan focus gutter and the yellow comment gutter SHALL be
 applied to the block's lines. The focus signal (cyan) SHALL take
 precedence over the comment signal (yellow): the gutter
 character for a focused-and-commented block SHALL be `▍` cyan.
-The background tint over the commented line range SHALL still
-cover the block's content lines regardless of focus.
 
-> **Note:** The prior version of this requirement described the
-> heavy horizontal border around the focused block. The border
-> has been replaced by the cyan left-gutter focus indicator
-> defined in the `latest-message-view` spec (`### Requirement:
-> Block focus indicator`). This requirement is preserved because
-> the *coexistence* rule still applies (the gutter's cyan state
-> and the comment tint's yellow gutter can both apply to the
-> same block).
-
-#### Scenario: Focused commented block shows cyan gutter over tint
+#### Scenario: Focused commented block shows cyan gutter
 
 - **WHEN** a block is both the currently-focused block and has
   comments
 - **THEN** the rendered view shows the cyan `▍` gutter on every
-  line in the block's range, and the background tint over those
-  lines is unchanged
+  line in the block's range
 
 ### Requirement: Cursor drives the gutter highlight
 

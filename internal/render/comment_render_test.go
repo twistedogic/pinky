@@ -13,8 +13,8 @@ func mustTime(t *testing.T) time.Time {
 
 func TestRenderMessageWithComments_NoCommentsMatchesPlain(t *testing.T) {
 	md := "# Title\n\nbody paragraph.\n"
-	withComments, _ := RenderMessageWithComments(md, 80, nil)
-	plain, _ := renderBlocks(md, 80)
+	withComments, _ := RenderMessageWithComments(md, nil)
+	plain, _ := renderBlocks(md)
 	if withComments != plain {
 		t.Errorf("zero-comment render should equal plain render\n  with: %q\n  plain: %q", withComments, plain)
 	}
@@ -25,7 +25,7 @@ func TestRenderMessageWithComments_FootnoteBelowBlock(t *testing.T) {
 	comments := []Comment{
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "looks good", CreatedAt: mustTime(t)},
 	}
-	out, _ := RenderMessageWithComments(md, 80, comments)
+	out, _ := RenderMessageWithComments(md, comments)
 	plain := stripANSIForRender(out)
 	if !strings.Contains(plain, "▸") {
 		t.Errorf("expected block-level marker ▸ in output:\n%s", plain)
@@ -46,7 +46,7 @@ func TestRenderMessageWithComments_InlineFootnoteIncludesExcerpt(t *testing.T) {
 	comments := []Comment{
 		{BlockIdx: 0, CharStart: 6, CharEnd: 19, Source: "bravo charlie", Text: "rename", CreatedAt: mustTime(t)},
 	}
-	out, _ := RenderMessageWithComments(md, 80, comments)
+	out, _ := RenderMessageWithComments(md, comments)
 	plain := stripANSIForRender(out)
 	if !strings.Contains(plain, "•") {
 		t.Errorf("expected inline marker • in output:\n%s", plain)
@@ -64,7 +64,7 @@ func TestRenderMessageWithComments_NoInBlockGutterMarker(t *testing.T) {
 	comments := []Comment{
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "x", CreatedAt: mustTime(t)},
 	}
-	out, _ := RenderMessageWithComments(md, 80, comments)
+	out, _ := RenderMessageWithComments(md, comments)
 	plain := stripANSIForRender(out)
 	// The block-level marker ▸ must appear ONLY in the footnote line
 	// below the block, not prepended to the first line of the block
@@ -85,15 +85,17 @@ func TestRenderMessageWithComments_NoInBlockGutterMarker(t *testing.T) {
 
 func TestRenderMessageWithComments_BackgroundTintApplied(t *testing.T) {
 	md := "first line\nsecond line\nthird line\n"
-	// Comment on block 0 → tint should apply to all block lines.
 	comments := []Comment{
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "x", CreatedAt: mustTime(t)},
 	}
-	out, _ := RenderMessageWithComments(md, 80, comments)
-	// The tint is a lipgloss background — look for the bg ANSI code
-	// (48;5;Nm) which lipgloss emits when Background is set.
-	if !strings.Contains(out, "48;5;") && !strings.Contains(out, "48;2;") {
-		t.Errorf("expected background-color ANSI in output; got:\n%s", out)
+	out, _ := RenderMessageWithComments(md, comments)
+	// Background tinting was removed when glamour was dropped. The
+	// raw output must not contain any background-color ANSI code,
+	// since adding color to plain text would be visual noise.
+	for _, seq := range []string{"48;5;", "48;2;"} {
+		if strings.Contains(out, seq) {
+			t.Errorf("raw rendering must not emit background-color ANSI %q; got:\n%s", seq, out)
+		}
 	}
 }
 
@@ -103,7 +105,7 @@ func TestRenderMessageWithComments_MultipleCommentsStack(t *testing.T) {
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "first", CreatedAt: mustTime(t)},
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "second", CreatedAt: mustTime(t).Add(time.Second)},
 	}
-	out, _ := RenderMessageWithComments(md, 80, comments)
+	out, _ := RenderMessageWithComments(md, comments)
 	plain := stripANSIForRender(out)
 	if !strings.Contains(plain, "first") || !strings.Contains(plain, "second") {
 		t.Errorf("expected both footnotes in output:\n%s", plain)

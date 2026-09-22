@@ -2,30 +2,10 @@ package render
 
 import "bytes"
 
-// RenderedLineRange projects a (CharStart, CharEnd) byte range in
-// the original markdown onto a (startLine, endLine) range within the
-// block's rendered output. Returns the block's full StartLine/EndLine
-// for block-level comments (CharStart == CharEnd == -1).
-func RenderedLineRange(blocks []Block, blockIdx int, charA, charC int) (startLine, endLine int) {
-	if blockIdx < 0 || blockIdx >= len(blocks) {
-		return 0, 0
-	}
-	b := blocks[blockIdx]
-	if charA < 0 {
-		return b.StartLine, b.EndLine
-	}
-	a, c := charA, charC
-	if a > c {
-		a, c = c, a
-	}
-	startLine = b.StartLine + byteToLineInBlock(b, a)
-	endLine = b.StartLine + byteToLineInBlock(b, c)
-	if startLine > endLine {
-		startLine, endLine = endLine, startLine
-	}
-	return startLine, endLine
-}
-
+// byteToLineInBlock counts newlines in block.Source[:offset], so
+// the result is the 0-indexed line number within the block. Used
+// by NavLineIndex to project a (blockIdx, charPos) cursor to its
+// rendered line.
 func byteToLineInBlock(block Block, offset int) int {
 	if offset <= 0 {
 		return 0

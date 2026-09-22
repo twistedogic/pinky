@@ -551,8 +551,6 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case render.ActionCompose:
 			m.enterCompose()
-		case render.ActionHelp:
-			// handled by handleKey before we get here
 		}
 		return m, nil
 	}
@@ -773,7 +771,7 @@ func (m *model) refreshViewport() {
 	}
 	// RenderMessageWithComments is a strict superset of renderBlocks;
 	// for zero comments it returns the same output.
-	rendered, blocks := render.RenderMessageWithComments(m.latest.Text, m.width, m.comments)
+	rendered, blocks := render.RenderMessageWithComments(m.latest.Text, m.comments)
 	if rendered == "" {
 		// Renderer rejected this width (very narrow terminal): plain-text fallback.
 		m.viewport.SetContent(m.latest.Text)

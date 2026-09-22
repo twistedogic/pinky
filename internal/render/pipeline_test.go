@@ -12,15 +12,18 @@ func stripANSI(s string) string {
 	return ansiRe.ReplaceAllString(s, "")
 }
 
+// visibleLen keeps the historical name; returns the rune count of
+// the ANSI-stripped string.
 func visibleLen(s string) int {
 	return len([]rune(stripANSI(s)))
 }
 
-// TestPipeline_HeadingParaCode exercises parse → render → border
-// injection against a representative agent message.
+// TestPipeline_HeadingParaCode exercises parse → slice against a
+// representative agent message. Raw rendering: every block's source
+// appears verbatim in the output.
 func TestPipeline_HeadingParaCode(t *testing.T) {
 	md := "# Setup\n\nRead the file and parse it.\n\n```\nfunc main() {}\n```\n"
-	rendered, blocks := renderBlocks(md, 80)
+	rendered, blocks := renderBlocks(md)
 	if len(blocks) != 3 {
 		t.Fatalf("want 3 blocks, got %d", len(blocks))
 	}
@@ -35,23 +38,10 @@ func TestPipeline_HeadingParaCode(t *testing.T) {
 	}
 }
 
-// TestPipeline_FillsWidth verifies the rendered markdown content
-// uses the requested width, not width-2 (the dark preset's margin).
-// Regression guard for the glamour margin compensation in NewRenderer.
-func TestPipeline_FillsWidth(t *testing.T) {
-	for _, w := range []int{40, 80, 120} {
-		rendered, _ := renderBlocks("# Title\n\nBody paragraph.\n", w)
-		for i, line := range strings.Split(rendered, "\n") {
-			if vw := visibleLen(line); vw > 0 && vw != w {
-				t.Errorf("width=%d: line %d width=%d (want %d)\n  line: %q",
-					w, i, vw, w, line)
-			}
-		}
-	}
-}
-
+// TestPipeline_EmptyMessage: empty input renders to empty output
+// with zero blocks.
 func TestPipeline_EmptyMessage(t *testing.T) {
-	rendered, blocks := renderBlocks("", 80)
+	rendered, blocks := renderBlocks("")
 	if rendered != "" {
 		t.Errorf("empty message should render empty, got %q", rendered)
 	}
@@ -60,9 +50,11 @@ func TestPipeline_EmptyMessage(t *testing.T) {
 	}
 }
 
+// TestPipeline_BlockBoundariesNonOverlapping: contiguous blocks
+// have non-overlapping StartLine..EndLine ranges.
 func TestPipeline_BlockBoundariesNonOverlapping(t *testing.T) {
 	md := "# A\n\npara one\n\n## B\n\npara two\n\n- one\n- two\n- three\n"
-	_, blocks := renderBlocks(md, 80)
+	_, blocks := renderBlocks(md)
 	for i := 0; i < len(blocks)-1; i++ {
 		if blocks[i].EndLine >= blocks[i+1].StartLine {
 			t.Errorf("block %d (lines %d-%d) overlaps block %d (lines %d-%d)",

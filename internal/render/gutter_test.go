@@ -90,14 +90,12 @@ func TestGutter_NoFocusedNoCommentedEmitsOnlySpace(t *testing.T) {
 	}
 }
 
-// TestGutter_SmokeCheck is the one-line visual smoke check from the
-// proposal: a focused block whose HasComment is true renders with
-// cyan (not yellow) gutter, a non-focused commented block renders
-// with yellow gutter, and headings render without `#` prefixes.
-// Regression guard for the combined visual contract.
+// TestGutter_SmokeCheck exercises the combined visual contract: a
+// focused+commented block emits cyan gutter (not yellow), and an
+// unfocused commented block emits yellow gutter.
 func TestGutter_SmokeCheck(t *testing.T) {
 	md := "# A\n\nbody\n\n## B\n\nmore\n"
-	rendered, blocks := RenderMessageWithComments(md, 80, []Comment{
+	rendered, blocks := RenderMessageWithComments(md, []Comment{
 		{BlockIdx: 0, CharStart: -1, CharEnd: -1, Text: "x"},
 	})
 	if len(blocks) < 2 {
@@ -119,12 +117,5 @@ func TestGutter_SmokeCheck(t *testing.T) {
 	out2 := InjectGutter(rendered, blocks, 1)
 	if !strings.Contains(out2, gutterYellowANSI+"▍"+gutterReset) {
 		t.Errorf("unfocused commented block should still show yellow gutter; got:\n%s", out2)
-	}
-	// Headings rendered without `#` prefix — strip ANSI and inspect.
-	plain := stripANSI(rendered)
-	for _, line := range strings.Split(plain, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			t.Errorf("heading line should NOT begin with '#'; got %q", line)
-		}
 	}
 }

@@ -167,7 +167,6 @@ func TestNav_SQRNReturnActions(t *testing.T) {
 		{'q', ActionQuit},
 		{'r', ActionRefresh},
 		{'n', ActionCompose},
-		{'?', ActionHelp},
 	}
 	for _, c := range cases {
 		var st NavState

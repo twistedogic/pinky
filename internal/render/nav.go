@@ -16,7 +16,6 @@ const (
 	ActionRefresh
 	ActionQuit
 	ActionCompose
-	ActionHelp
 )
 
 // NavMode tracks the visual selection mode.
@@ -128,16 +127,12 @@ func NavHandle(r rune, st *NavState, cur *NavCursor, sel *NavSelection, blocks [
 		return ActionQuit
 	case 'n':
 		return ActionCompose
-	case '?':
-		return ActionHelp
 	}
 	return ActionNone
 }
 
 // NavLineIndex maps a (blockIdx, charPos) cursor to the rendered
-// line index within the concatenated viewport. Same 1-line drift
-// tolerance on glamour word-wrap as the comment-projection
-// helpers in anchor.go.
+// line index within the concatenated viewport.
 func NavLineIndex(blocks []Block, c NavCursor) int {
 	if c.BlockIdx < 0 || c.BlockIdx >= len(blocks) {
 		return 0

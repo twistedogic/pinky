@@ -1,9 +1,12 @@
-// Package render parses agent message markdown, indexes it into navigable
-// blocks, and renders it to a width-aware terminal string.
+// Package render parses agent message markdown, indexes it into
+// navigable blocks, and returns the raw source for each block so the
+// caller can display it in a viewport. No styling: the returned
+// string is the verbatim markdown text of the message, sliced at
+// block boundaries.
 //
-// Block boundaries are derived from the goldmark AST and tracked by line
-// indices in the rendered output so the caller can navigate by block and
-// mark the current block with an indicator.
+// Block boundaries are derived from the goldmark AST and tracked by
+// line indices in the concatenated output so the caller can navigate
+// by block and mark the current block with a gutter indicator.
 package render
 
 import (
@@ -11,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	extensionAst "github.com/yuin/goldmark/extension/ast"
@@ -31,11 +33,11 @@ const (
 	BlockDefList   BlockKind = "definition-list"
 )
 
-// Block is one navigable unit in a rendered agent message.
+// Block is one navigable unit in the source markdown.
 //
 // StartLine and EndLine are 0-indexed line offsets in the concatenated
-// rendered output produced by renderBlocks. They are contiguous: blocks
-// do not overlap, and consecutive blocks are joined back-to-back.
+// raw source produced by renderBlocks. They are contiguous: blocks do
+// not overlap, and consecutive blocks are joined back-to-back.
 //
 // HasComment is set true by RenderMessageWithComments when at least one
 // saved comment targets this block. The flag drives the yellow left-
@@ -48,60 +50,12 @@ type Block struct {
 	HasComment bool
 }
 
-// NewRenderer returns a glamour TermRenderer configured for pinky.
-//
-// The pinky style lives in style.go and uses the same color family
-// as the lipgloss TUI (51 cyan selection, 228 yellow comments,
-// 250 body, 241 dim, 42 user), so headings/links/etc feel native
-// to the rest of the UI.
-//
-// The pinky style sets Document.Margin to 1; we pass width+1 to
-// WordWrap so the rendered content area (1 margin + content) totals
-// the requested width. The model's left-gutter ▍ sits in column 2.
-//
-// `WithChromaFormatter("terminal256")` enables syntax highlighting
-// for fenced code blocks via chroma.
-func NewRenderer(width int) (*glamour.TermRenderer, error) {
-	return glamour.NewTermRenderer(
-		glamour.WithStyles(pinkyStyle()),
-		glamour.WithChromaFormatter("terminal256"),
-		glamour.WithWordWrap(width+1),
-	)
-}
-
-// cachedRenderer holds the last-built glamour renderer keyed by width.
-// tea.Update is single-threaded so no mutex is needed. Width only
-// changes on terminal resize, so cache hit rate in steady state is
-// ~100%; glamour setup is heavy (style parse + chroma).
-var cachedRenderer struct {
-	width int
-	r     *glamour.TermRenderer
-}
-
-func cachedRendererFor(width int) (*glamour.TermRenderer, error) {
-	if cachedRenderer.r != nil && cachedRenderer.width == width {
-		return cachedRenderer.r, nil
-	}
-	r, err := NewRenderer(width)
-	if err != nil {
-		return nil, err
-	}
-	cachedRenderer.r = r
-	cachedRenderer.width = width
-	return r, nil
-}
-
-// renderBlocks parses md and renders each non-empty top-level block
-// (heading, paragraph, code block, list item, blockquote). Empty
-// paragraphs, thematic breaks, and HTML blocks are dropped. Each
-// block is rendered exactly once and concatenated into the returned
-// string; the []Block index carries (Kind, Source, line range) into
-// that output.
-func renderBlocks(md string, width int) (string, []Block) {
-	r, err := cachedRendererFor(width)
-	if err != nil {
-		return md, nil
-	}
+// renderBlocks parses md and slices it into top-level blocks. Each
+// block's source is the verbatim markdown text from that node's start
+// byte to the next sibling's start byte (or end of source for the
+// last block). Empty blocks, thematic breaks, and HTML blocks are
+// dropped. Lists produce one entry per non-empty ListItem.
+func renderBlocks(md string) (string, []Block) {
 	root := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,     // GitHub-flavored markdown (tables, strikethrough, task lists, autolinks)
@@ -116,10 +70,10 @@ func renderBlocks(md string, width int) (string, []Block) {
 	line := 0
 	for child := root.FirstChild(); child != nil; child = child.NextSibling() {
 		for _, ext := range extract(child, src) {
-			rendered, _ := r.Render(ext.source + "\n")
-			if rendered == "" {
+			if strings.TrimSpace(ext.source) == "" {
 				continue
 			}
+			rendered := ext.source + "\n"
 			count := lineCount(rendered)
 			if count == 0 {
 				continue
@@ -140,9 +94,6 @@ func renderBlocks(md string, width int) (string, []Block) {
 // CurrentBlockIdx returns the index of the block containing the given
 // viewport YOffset, or -1 if yOffset is outside any block (above the
 // first block or past the last).
-//
-// The "containing" block is the one whose StartLine is closest to (and
-// not greater than) yOffset, bounded by EndLine.
 func CurrentBlockIdx(blocks []Block, yOffset int) int {
 	if len(blocks) == 0 {
 		return -1
@@ -160,112 +111,85 @@ type extracted struct {
 	source string
 }
 
-// extract walks a top-level AST node and returns the navigable blocks
-// it contains. Top-level nodes that are themselves blocks produce one
-// entry; List nodes produce one entry per non-empty ListItem.
+// extract returns one entry per navigable block. Top-level nodes
+// that are themselves blocks produce one entry; List nodes produce one
+// entry per non-empty ListItem. Each entry's `source` is the raw
+// markdown text from the node's first line to the next sibling's
+// first line (or end of source). Empty (whitespace-only) sources
+// are skipped at the top so per-case switches don't repeat the check.
 func extract(node ast.Node, src []byte) []extracted {
+	start, end := byteRange(node, src)
+	if start < 0 || start >= end {
+		return nil
+	}
+	source := strings.TrimRight(string(src[start:end]), "\n")
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
+
 	switch n := node.(type) {
 	case *ast.Heading:
-		s := blockText(n, src)
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		// Reconstruct heading source: "#" * Level + " " + text + "\n".
-		return []extracted{{kind: BlockHeading, source: strings.Repeat("#", n.Level) + " " + s}}
+		return []extracted{{kind: BlockHeading, source: source}}
 
 	case *ast.Paragraph:
-		s := blockText(n, src)
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		return []extracted{{kind: BlockParagraph, source: s}}
+		return []extracted{{kind: BlockParagraph, source: source}}
 
 	case *ast.FencedCodeBlock, *ast.CodeBlock:
-		s := blockText(n, src)
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		return []extracted{{kind: BlockCode, source: "```\n" + s + "\n```"}}
+		return []extracted{{kind: BlockCode, source: source}}
 
 	case *ast.Blockquote:
-		s := blockText(n, src)
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		return []extracted{{kind: BlockQuote, source: s}}
+		return []extracted{{kind: BlockQuote, source: source}}
 
 	case *ast.List:
+		// One block per ListItem, each with its own raw byte range.
 		var out []extracted
 		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 			li, ok := child.(*ast.ListItem)
 			if !ok {
 				continue
 			}
-			s := blockText(li, src)
-			if strings.TrimSpace(s) == "" {
+			liStart, liEnd := byteRange(li, src)
+			if liStart < 0 || liStart >= liEnd {
 				continue
 			}
-			out = append(out, extracted{kind: BlockListItem, source: "- " + s})
+			itemSrc := strings.TrimRight(string(src[liStart:liEnd]), "\n")
+			if strings.TrimSpace(itemSrc) == "" {
+				continue
+			}
+			out = append(out, extracted{kind: BlockListItem, source: itemSrc})
 		}
 		return out
 
 	case *extensionAst.Table:
-		// Whole table = one block. Glamour's renderer needs the
-		// header + alignment + body rows together for column
-		// alignment; splitting per row would break the visual.
-		s := blockText(n, src)
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		return []extracted{{kind: BlockTable, source: s}}
+		return []extracted{{kind: BlockTable, source: source}}
 
 	case *extensionAst.DefinitionList:
-		// Same reasoning as Table: glamour expects the whole list
-		// (terms + descriptions) for proper rendering. One block.
-		s := blockText(n, src)
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		return []extracted{{kind: BlockDefList, source: s}}
+		return []extracted{{kind: BlockDefList, source: source}}
 	}
 	return nil
 }
 
-// blockText concatenates text content from a block node. For nodes
-// with their own Lines() (heading, paragraph, code block, blockquote)
-// it uses those. For container nodes (ListItem) it walks children
-// and concatenates their text. For nodes with empty Lines() (GFM
-// Table, DefinitionList) it falls back to slicing src by Pos() and
-// the next sibling's Pos(). Empty nodes return "".
-func blockText(node ast.Node, src []byte) string {
-	if _, ok := node.(*ast.ListItem); ok {
-		var b strings.Builder
-		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-			b.WriteString(blockText(child, src))
-		}
-		return b.String()
-	}
-	lines := node.Lines()
-	if lines.Len() > 0 {
-		var b strings.Builder
-		for i := 0; i < lines.Len(); i++ {
-			seg := lines.At(i)
-			b.Write(seg.Value(src))
-		}
-		return b.String()
-	}
-	// Fallback: derive byte range from Pos() to next sibling's Pos().
-	// Goldmark's GFM Table and DefinitionList AST nodes have empty
-	// Lines() but reliable Pos() values.
-	start := node.Pos()
+// byteRange returns the start and end byte offsets (into src) of a
+// block's content. start is the node's Pos() (the start of its first
+// source line). end is the start of the next sibling — walking up
+// the parent chain so a last child of a container picks up the
+// container's next sibling, not end-of-source.
+func byteRange(node ast.Node, src []byte) (start, end int) {
+	start = node.Pos()
 	if start < 0 {
-		start = 0
+		return -1, -1
 	}
-	end := len(src)
-	if next := node.NextSibling(); next != nil && next.Pos() >= 0 {
-		end = next.Pos()
+	end = len(src)
+	for n := ast.Node(node); n != nil; n = n.Parent() {
+		if next := n.NextSibling(); next != nil && next.Pos() >= 0 {
+			end = next.Pos()
+			break
+		}
 	}
-	return string(src[start:end])
+	if end < start {
+		end = start
+	}
+	return start, end
 }
 
 func lineCount(s string) int {

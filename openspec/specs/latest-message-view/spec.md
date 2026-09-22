@@ -22,52 +22,44 @@ The system SHALL display only the most recent assistant message in the main view
 - **WHEN** the agent session is polled and no new assistant text has been surfaced
 - **THEN** the main view is unchanged
 
-### Requirement: Render assistant text as markdown
-The system SHALL render the assistant message text as markdown
-using `github.com/charmbracelet/glamour`, supporting headings,
-bold and italic emphasis, inline code, fenced code blocks,
-ordered and unordered lists, blockquotes, GFM tables, and GFM
-definition lists. Rendered output SHALL be wrapped to the
-current viewport width. The glamour `Margin` SHALL be `1` (one
-leading cell) so the document's left indent combined with the
-focus gutter (see `### Requirement: Block focus indicator`)
-totals two cells of left margin — the same visual width the
-prior 2-cell-margin + border layout used.
+### Requirement: Display assistant text as raw markdown source
+The system SHALL display the assistant message text as raw
+markdown source — verbatim, with no styling. Markdown markers
+(`#`, `*`, `_`, backticks, ` ``` `, `|`, `>`) SHALL appear in
+the output exactly as the agent wrote them. No glamour or other
+markdown-to-ANSI renderer is involved; the bytes shown to the
+user are the bytes the agent produced, sliced at block boundaries.
 
-#### Scenario: Headings render with weight-only heading style
+#### Scenario: Headings appear with their `#` markers
 - **WHEN** the assistant message contains a markdown heading
   (e.g., `## Step 1`)
-- **THEN** the heading is rendered with the heading style
-  described in `### Requirement: Heading weight without markdown
-  markers` (cyan, bold, and for `h1` also underlined) and the
-  rendered text does not begin with `#` characters
+- **THEN** the heading appears in the view starting with `## `
+  (the marker is preserved verbatim)
 
-#### Scenario: Fenced code block renders as a block
+#### Scenario: Fenced code block appears as raw fenced code
 - **WHEN** the assistant message contains a fenced code block
   (e.g., ` ```go ... ``` `)
-- **THEN** the code block is rendered with a code-block style
-  distinct from prose
+- **THEN** the opening and closing fence lines are visible in
+  the view and the code inside is shown untransformed (no syntax
+  highlighting)
 
-#### Scenario: Long line wraps to viewport width
+#### Scenario: GFM table appears as raw pipe text
+- **WHEN** the assistant message contains a GFM-flavoured
+  markdown table
+- **THEN** the header row, alignment row, and body rows appear
+  verbatim — `|` characters included, no column alignment
+
+#### Scenario: GFM definition list appears as raw definition text
+- **WHEN** the assistant message contains a GFM definition list
+- **THEN** the terms and `:` descriptions appear verbatim with
+  no special rendering
+
+#### Scenario: Long lines are not wrapped
 - **WHEN** the assistant message contains a line longer than the
   viewport width
-- **THEN** the rendered output wraps the line at the viewport
-  boundary rather than overflowing horizontally
-
-#### Scenario: GFM table renders as a table
-- **WHEN** the assistant message contains a GFM-flavoured
-  markdown table (a header row followed by an alignment row
-  of `---` separators, followed by one or more body rows)
-- **THEN** the table renders in the main view as a single block
-  with column alignment preserved and every cell's text visible
-  in the output
-
-#### Scenario: GFM definition list renders as a block
-- **WHEN** the assistant message contains a GFM definition list
-  (one or more `term\n:   description` pairs)
-- **THEN** the definition list renders in the main view as a
-  single block with every term and description visible in the
-  output
+- **THEN** the line is shown on one row of the source (the
+  viewport scrolls horizontally if needed; pinky does not
+  word-wrap)
 
 ### Requirement: Block focus indicator
 
@@ -107,35 +99,8 @@ cursor.
 - **THEN** the cyan `▍` follows block M, regardless of the
   viewport's `YOffset`
 
-### Requirement: Heading weight without markdown markers
-
-The TUI SHALL render markdown headings using colour and weight
-rather than the literal `#` characters from the markdown source.
-The `Prefix` configuration passed to glamour for `h1`, `h2`, and
-`h3` SHALL be the empty string. `h1` SHALL be rendered in cyan
-(foreground colour `51`) with bold and underline modifiers; `h2`
-SHALL be rendered in cyan (foreground `51`) with bold; `h3` SHALL
-be rendered in a softer cyan (foreground colour `87`) with bold.
-The rendered heading text SHALL NOT begin with one or more `#`
-characters.
-
-#### Scenario: h1 renders as cyan bold underlined with no `#` prefix
-- **WHEN** the assistant message contains `# Step 1`
-- **THEN** the rendered line shows the text `Step 1` (no `#`
-  prefix) styled in cyan bold underlined
-
-#### Scenario: h2 renders as cyan bold with no `##` prefix
-- **WHEN** the assistant message contains `## Subtask`
-- **THEN** the rendered line shows the text `Subtask` (no `##`
-  prefix) styled in cyan bold
-
-#### Scenario: h3 renders as soft-cyan bold with no `###` prefix
-- **WHEN** the assistant message contains `### Detail`
-- **THEN** the rendered line shows the text `Detail` (no `###`
-  prefix) styled in a softer cyan bold
-
 ### Requirement: Build markdown block index
-The system SHALL parse the assistant message text into a markdown AST and build an index of top-level non-empty blocks. Each indexed block SHALL record its kind (`heading`, `paragraph`, `code`, `list-item`, `blockquote`, `table`, or `definition-list`) and its absolute start and end line indices in the rendered output. Empty blocks, thematic breaks, and HTML blocks SHALL be excluded from the index. A GFM table SHALL be indexed as a single block (not one block per row) so that glamour's column alignment is preserved in the rendered view. A GFM definition list SHALL be indexed as a single block.
+The system SHALL parse the assistant message text into a markdown AST and build an index of top-level non-empty blocks. Each indexed block SHALL record its kind (`heading`, `paragraph`, `code`, `list-item`, `blockquote`, `table`, or `definition-list`) and its absolute start and end line indices in the rendered output. Empty blocks, thematic breaks, and HTML blocks SHALL be excluded from the index. A GFM table SHALL be indexed as a single block (not one block per row). A GFM definition list SHALL be indexed as a single block.
 
 #### Scenario: Multi-block message produces one index entry per block
 - **WHEN** the assistant message contains a heading followed by a paragraph followed by a code block
@@ -238,16 +203,15 @@ annotation overlay consists of:
 
 - A footnote line for each saved comment, rendered immediately
   below the block it annotates and before the next block begins.
-- A background color tint covering the rendered line range of each
-  commented block.
 
 The annotation overlay SHALL NOT modify the assistant message text
-itself; the markdown rendering of the assistant message is
-unchanged. The overlay is composed after markdown rendering as a
-post-processing pass on the rendered line ranges, using the block
-index from "Build markdown block index" as the line-range source.
+itself; the assistant message is shown verbatim and the overlay
+sits on top of it. The yellow left-gutter indicator on every line
+inside a commented block's `StartLine..EndLine` range (defined in
+`message-comments`) is the only visual signal distinguishing a
+commented block from an uncommented one.
 
-#### Scenario: Comented block shows footnote below
+#### Scenario: Commented block shows footnote below
 - **WHEN** a saved block-level comment exists for a block in the
   rendered message
 - **THEN** the main view shows the rendered block, immediately
@@ -257,10 +221,10 @@ index from "Build markdown block index" as the line-range source.
 #### Scenario: Annotation overlay survives width reflow
 - **WHEN** the terminal width changes and the rendered message is
   re-flowed
-- **THEN** the comment annotations (footnotes, background tints,
-  and the gutter flag carried on `Block.HasComment`) are re-applied
-  to the new line ranges without loss; no annotation references a
-  stale line index from the previous width
+- **THEN** the comment annotations (footnotes and the gutter flag
+  carried on `Block.HasComment`) are re-applied to the new line
+  ranges without loss; no annotation references a stale line index
+  from the previous width
 
 ### Requirement: Always-visible help footer
 The latest-message view SHALL render a one-line keymap footer at
