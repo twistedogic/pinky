@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -378,5 +379,123 @@ func TestFileView_EscReturnsToDirNav(t *testing.T) {
 	um = updated.(model)
 	if um.state != stateFileNav {
 		t.Errorf("expected stateFileNav; got %v", um.state)
+	}
+}
+
+// longFileFixture writes a fixture file with N lines into the
+// temp workspace and returns its relative path. Used by the
+// viewport scroll tests below.
+func longFileFixture(t *testing.T, n int) (root, rel string) {
+	t.Helper()
+	root = t.TempDir()
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	rel = "big.txt"
+	if err := os.WriteFile(filepath.Join(root, rel), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root, rel
+}
+
+// openFileInFixture wires the fixture into the model and walks
+// the workspace, so the file is reachable via the file tree.
+// Returns the model already transitioned to stateFileView with the
+// file loaded.
+func openFileInFixture(t *testing.T, root, rel string) *model {
+	t.Helper()
+	m := newIdleModelForKeymap(t)
+	m.fileRoot = root
+	entries, err := workspace.Walk(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.fileEntries = entries
+	m.fileCollapsed = map[string]bool{}
+	m.state = stateFileNav
+	m.tab = tabFiles
+	m.openFileViewer(rel)
+	return &m
+}
+
+// TestFileView_LongFileShowsPositionIndicator: opening a file
+// taller than the viewport renders a `lines N-M of K` indicator
+// in the header.
+func TestFileView_LongFileShowsPositionIndicator(t *testing.T) {
+	root, rel := longFileFixture(t, 100)
+	m := openFileInFixture(t, root, rel)
+	view := m.fileViewView()
+	if !strings.Contains(view, "lines 1-") {
+		t.Errorf("expected position indicator in long-file header; got:\n%s", view)
+	}
+	if !strings.Contains(view, "of 100") {
+		t.Errorf("expected `of 100` in indicator; got:\n%s", view)
+	}
+}
+
+// TestFileView_ShortFileOmitsIndicator: a file that fits in the
+// viewport renders no `lines N-M of K` indicator.
+func TestFileView_ShortFileOmitsIndicator(t *testing.T) {
+	root, rel := longFileFixture(t, 3)
+	m := openFileInFixture(t, root, rel)
+	view := m.fileViewView()
+	if strings.Contains(view, "lines ") {
+		t.Errorf("short file should not show indicator; got:\n%s", view)
+	}
+}
+
+// TestFileView_JScrollsViewport: pressing `j` repeatedly moves
+// the cursor and scrolls the file viewport so the cursor stays
+// visible.
+func TestFileView_JScrollsViewport(t *testing.T) {
+	root, rel := longFileFixture(t, 100)
+	m := openFileInFixture(t, root, rel)
+	start := m.fileViewer.viewport.YOffset
+	// Move cursor down well past the viewport height.
+	for i := 0; i < 30; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		mv := updated.(model)
+		m = &mv
+	}
+	if m.fileViewer.viewport.YOffset <= start {
+		t.Errorf("expected viewport YOffset to advance after 30 j presses; start=%d now=%d",
+			start, m.fileViewer.viewport.YOffset)
+	}
+	if m.fileViewer.cursor != 31 {
+		t.Errorf("expected cursor at line 31; got %d", m.fileViewer.cursor)
+	}
+}
+
+// TestFileView_PageDownScrolls: pressing PageDown scrolls the
+// file viewport without moving the cursor.
+func TestFileView_PageDownScrolls(t *testing.T) {
+	root, rel := longFileFixture(t, 100)
+	m := openFileInFixture(t, root, rel)
+	start := m.fileViewer.viewport.YOffset
+	startCursor := m.fileViewer.cursor
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	mv := updated.(model)
+	m = &mv
+	if m.fileViewer.viewport.YOffset <= start {
+		t.Errorf("expected PageDown to advance YOffset; start=%d now=%d",
+			start, m.fileViewer.viewport.YOffset)
+	}
+	if m.fileViewer.cursor != startCursor {
+		t.Errorf("PageDown should not move cursor; was %d now %d",
+			startCursor, m.fileViewer.cursor)
+	}
+}
+
+// TestFileView_EndLandsAtBottom: pressing End scrolls the file
+// viewport to the last line.
+func TestFileView_EndLandsAtBottom(t *testing.T) {
+	root, rel := longFileFixture(t, 100)
+	m := openFileInFixture(t, root, rel)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	mv := updated.(model)
+	m = &mv
+	if !m.fileViewer.viewport.AtBottom() {
+		t.Errorf("End should scroll viewport to bottom; YOffset=%d", m.fileViewer.viewport.YOffset)
 	}
 }

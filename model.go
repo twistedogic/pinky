@@ -80,7 +80,8 @@ type fileSelection struct {
 
 // fileViewer holds the state for stateFileView: the raw content,
 // the line index (parallel to lines, drives gutter flags), the
-// cursor (line + char), and an optional visual selection.
+// cursor (line + char), an optional visual selection, and the
+// viewport that scrolls the rendered content.
 type fileViewer struct {
 	path      string
 	content   string
@@ -88,6 +89,7 @@ type fileViewer struct {
 	cursor    int      // 1-based line index
 	visual    fileSelection
 	lineIndex []render.FileLine // parallel to lines
+	viewport  viewport.Model    // ponytail: scrollable view of the rendered file
 }
 
 type model struct {
@@ -363,17 +365,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if last != nil {
-			if last.Text != m.latest.Text {
+			// ponytail: sticky-bottom — only GotoBottom when the user
+			// was already at the bottom. A genuinely new message
+			// (different Text) force-attaches so the new content is
+			// visible.
+			force := last.Text != m.latest.Text
+			wasAtBottom := force || m.viewport.AtBottom()
+			if force {
 				m.comments = nil
 			}
 			m.latest = *last
+			if m.hist != nil {
+				_ = m.hist.Append(string(last.Role), last.Text)
+			}
+			m.streaming = true
+			m.refreshViewport()
+			if wasAtBottom {
+				m.viewport.GotoBottom()
+			}
 		}
-		if m.hist != nil && last != nil {
-			_ = m.hist.Append(string(last.Role), last.Text)
-		}
-		m.streaming = true
-		m.refreshViewport()
-		m.viewport.GotoBottom()
 		return m, nil
 	}
 
@@ -947,6 +957,11 @@ func (m *model) openFileViewer(path string) {
 	}
 	content := string(data)
 	_, idx := render.RenderFile(content, m.fileCommentsFor(path))
+	w, h := m.viewportSize()
+	h-- // ponytail: one line for the file-viewer header above the viewport.
+	if h < 1 {
+		h = 1
+	}
 	m.fileViewer = fileViewer{
 		path:      path,
 		content:   content,
@@ -954,9 +969,11 @@ func (m *model) openFileViewer(path string) {
 		cursor:    1,
 		visual:    fileSelection{LineA: 1, CharA: 0, LineC: 1, CharC: 0},
 		lineIndex: idx,
+		viewport:  viewport.New(w, h),
 	}
 	m.state = stateFileView
 	m.reflow()
+	m.refreshFileView()
 }
 
 // fileCommentsFor returns the file-kind comments that target path.
@@ -1038,12 +1055,30 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openFileComment()
 		return m, nil
 	}
+	// ponytail: forward scroll keys (arrows, PageUp/Down) to the
+	// file viewport so the user can scroll without moving the
+	// cursor. Home/End aren't in the viewport's default keymap;
+	// handle them explicitly so the position-indicator and sticky-
+	// bottom reattach patterns stay intuitive.
+	switch msg.Type {
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+		var vpCmd tea.Cmd
+		m.fileViewer.viewport, vpCmd = m.fileViewer.viewport.Update(msg)
+		return m, vpCmd
+	case tea.KeyHome:
+		m.fileViewer.viewport.GotoTop()
+		return m, nil
+	case tea.KeyEnd:
+		m.fileViewer.viewport.GotoBottom()
+		return m, nil
+	}
 	return m, nil
 }
 
 // fileViewMoveLine moves the cursor line by delta, extending the
 // visual selection if active (charA snaps to 0, charC snaps to the
-// end of the destination line).
+// end of the destination line). After the move the file viewport
+// is scrolled so the cursor stays visible (1-line cushion).
 func (m *model) fileViewMoveLine(delta int) {
 	max := len(m.fileViewer.lines)
 	if max == 0 {
@@ -1066,6 +1101,29 @@ func (m *model) fileViewMoveLine(delta int) {
 		// from the line endpoints regardless of delta direction.
 		v.CharA = 0
 		v.CharC = len(m.fileViewer.lines[next-1])
+	}
+	m.scrollFileCursorIntoView()
+	m.refreshFileView()
+}
+
+// scrollFileCursorIntoView mirrors scrollCursorIntoView for the
+// file viewer: if the cursor's 0-indexed line falls outside
+// [YOffset, YOffset+Height), scroll so it lands on the last
+// visible line. Same 1-line cushion as the message view.
+func (m *model) scrollFileCursorIntoView() {
+	if len(m.fileViewer.lines) == 0 {
+		return
+	}
+	target := m.fileViewer.cursor - 1
+	top := m.fileViewer.viewport.YOffset
+	bot := top + m.fileViewer.viewport.Height - 1
+	if target >= top && target <= bot {
+		return
+	}
+	if target < top {
+		m.fileViewer.viewport.SetYOffset(target)
+	} else {
+		m.fileViewer.viewport.SetYOffset(target - m.fileViewer.viewport.Height + 1)
 	}
 }
 
@@ -1209,11 +1267,18 @@ func (m *model) reflow() {
 	if m.state == stateCompose || m.state == stateCommentComposer {
 		vpHeight -= composeHeight + 1
 	}
+	if m.state == stateFileView {
+		vpHeight-- // ponytail: header line above the file viewport.
+	}
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
 	m.viewport.Width = m.width
 	m.viewport.Height = vpHeight
+	if m.fileViewer.path != "" {
+		m.fileViewer.viewport.Width = m.width
+		m.fileViewer.viewport.Height = vpHeight
+	}
 	if m.state == stateCompose || m.state == stateNav {
 		m.textarea.SetWidth(m.width)
 	}
@@ -1535,25 +1600,20 @@ func (m model) fileNavView() string {
 	return b.String()
 }
 
-// fileViewView renders the current file's content with line
-// numbers, the yellow gutter on commented lines, and an inline
-// cyan highlight of the visual selection (if any) so the user can
-// see what their `c` will anchor against. Renders fresh each
-// call — no stored rendered string to drift out of sync.
-func (m model) fileViewView() string {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	const yellow = "\x1b[38;5;228m"
-
-	var b strings.Builder
-	b.WriteString(headerStyle.Render(fmt.Sprintf("file — %s", m.fileViewer.path)))
-	b.WriteByte('\n')
-
+// renderFileContent builds the per-line rendered string for the
+// file viewer: right-aligned line numbers, a yellow `▍` gutter on
+// commented lines, and an inline cyan highlight of the visual
+// selection. No header — the header (with optional position
+// indicator) lives in fileViewView, outside the viewport so it
+// stays visible while the body scrolls.
+func (m model) renderFileContent() string {
 	if len(m.fileViewer.lines) == 0 {
-		b.WriteString(dimStyle.Render("(empty file)"))
-		return b.String()
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		return dimStyle.Render("(empty file)")
 	}
+	const yellow = "\x1b[38;5;228m"
 	width := len(fmt.Sprintf("%d", len(m.fileViewer.lines)))
+	var b strings.Builder
 	for i, content := range m.fileViewer.lines {
 		ln := i + 1
 		gutter := " "
@@ -1563,6 +1623,35 @@ func (m model) fileViewView() string {
 		fmt.Fprintf(&b, "%s %*d  %s\n", gutter, width, ln, applySelection(content, ln, m.fileViewer.visual))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// fileViewView renders the file-viewer header (path + optional
+// `lines N-M of K` position indicator) followed by the file
+// viewport's visible window. The header sits outside the viewport
+// so the indicator stays visible while the body scrolls.
+func (m model) fileViewView() string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	header := fmt.Sprintf("file — %s", m.fileViewer.path)
+	if len(m.fileViewer.lines) > m.fileViewer.viewport.Height {
+		top := m.fileViewer.viewport.YOffset + 1
+		bot := top + m.fileViewer.viewport.Height - 1
+		if bot > len(m.fileViewer.lines) {
+			bot = len(m.fileViewer.lines)
+		}
+		header += fmt.Sprintf("  (lines %d-%d of %d)", top, bot, len(m.fileViewer.lines))
+	}
+	return headerStyle.Render(header) + "\n" + m.fileViewer.viewport.View()
+}
+
+// refreshFileView rebuilds the file viewer's content and hands it
+// to the viewport. Called on file-open and after every cursor /
+// selection move that affects the rendered gutter or selection
+// highlight.
+func (m *model) refreshFileView() {
+	if m.fileViewer.path == "" {
+		return
+	}
+	m.fileViewer.viewport.SetContent(m.renderFileContent())
 }
 
 // applySelection splices cyan ANSI around the byte range of lineNo

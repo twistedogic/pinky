@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -159,5 +160,119 @@ func TestSessionMsg_SameMsgKeepsComments(t *testing.T) {
 	got := updated.(model)
 	if len(got.comments) != 1 {
 		t.Errorf("identical messages should not clear comments; got %d", len(got.comments))
+	}
+}
+
+// longMsg returns markdown that renders taller than the test
+// viewport (80x20). 60 code lines + heading ≈ 62 rendered lines,
+// well past viewport height so YOffset can be non-zero and the
+// sticky-bottom pin has somewhere to release.
+func longMsg() string {
+	var b strings.Builder
+	b.WriteString("# Title\n\n```\n")
+	for i := 0; i < 60; i++ {
+		b.WriteString("line\n")
+	}
+	b.WriteString("```")
+	return b.String()
+}
+
+// TestSessionMsg_StickyBottom_ReleasedOnScrollUp verifies that
+// after the user scrolls up, a poll with no new text does NOT
+// yank the viewport back to the bottom (the fix for the
+// scroll-up bug).
+func TestSessionMsg_StickyBottom_ReleasedOnScrollUp(t *testing.T) {
+	m := newIdleModel(t, &fakeSource{})
+	text := longMsg()
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: text},
+	}})
+	got := updated.(model)
+	if !got.viewport.AtBottom() {
+		t.Fatalf("first poll should land at bottom; YOffset=%d", got.viewport.YOffset)
+	}
+
+	// User scrolls up by 5 lines.
+	got.viewport.SetYOffset(got.viewport.YOffset - 5)
+	upOff := got.viewport.YOffset
+	if upOff <= 0 {
+		t.Fatalf("scroll-up should leave YOffset > 0; got %d", upOff)
+	}
+
+	// Poll with same text — must not move YOffset.
+	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: text},
+	}})
+	got2 := updated2.(model)
+	if got2.viewport.YOffset != upOff {
+		t.Errorf("scrolled-up YOffset changed after poll: was %d, now %d",
+			upOff, got2.viewport.YOffset)
+	}
+}
+
+// TestSessionMsg_StickyBottom_ReattachOnEnd verifies that pressing
+// End (which scrolls the viewport to the bottom) re-anchors the
+// sticky-bottom pin, so the next poll resumes auto-follow.
+func TestSessionMsg_StickyBottom_ReattachOnEnd(t *testing.T) {
+	m := newIdleModel(t, &fakeSource{})
+	text := longMsg()
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: text},
+	}})
+	got := updated.(model)
+
+	// Scroll up + poll (no reattach).
+	got.viewport.SetYOffset(got.viewport.YOffset - 3)
+	upOff := got.viewport.YOffset
+	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: text},
+	}})
+	got2 := updated2.(model)
+	if got2.viewport.YOffset != upOff {
+		t.Fatalf("setup: scrolled-up YOffset should stick; was %d now %d",
+			upOff, got2.viewport.YOffset)
+	}
+
+	// Press End to return to bottom, then poll — should reattach.
+	for !got2.viewport.AtBottom() {
+		updated3, _ := got2.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+		got2 = updated3.(model)
+	}
+	if !got2.viewport.AtBottom() {
+		t.Fatalf("PageDown should scroll to bottom; YOffset=%d", got2.viewport.YOffset)
+	}
+	updated4, _ := got2.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: text},
+	}})
+	got4 := updated4.(model)
+	if !got4.viewport.AtBottom() {
+		t.Errorf("after returning to bottom, poll should stay at bottom; YOffset=%d", got4.viewport.YOffset)
+	}
+}
+
+// TestSessionMsg_NewTextForceAttaches verifies that a brand-new
+// message (different Text) force-scrolls to the bottom regardless
+// of prior scroll position.
+func TestSessionMsg_NewTextForceAttaches(t *testing.T) {
+	m := newIdleModel(t, &fakeSource{})
+	text := longMsg()
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: text},
+	}})
+	got := updated.(model)
+
+	// Scroll up.
+	got.viewport.SetYOffset(got.viewport.YOffset - 5)
+	if got.viewport.YOffset <= 0 {
+		t.Fatalf("setup: scroll-up should leave YOffset > 0")
+	}
+
+	// New message replaces — must land at bottom.
+	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
+		{Role: session.RoleAssistant, Text: "# Different\n\nbody"},
+	}})
+	got2 := updated2.(model)
+	if !got2.viewport.AtBottom() {
+		t.Errorf("new message should force bottom; YOffset=%d", got2.viewport.YOffset)
 	}
 }
