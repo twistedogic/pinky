@@ -29,6 +29,8 @@ func truncate(s string, n int) string {
 //	N comments:
 //	- block "<excerpt>" (lines X-Y): <text>
 //	- inline "<excerpt>" (line Z): <text>
+//	- file "<path>" (lines X-Y): <text>
+//	- file-inline "<excerpt>" (line Z): <text>
 //
 // No leading separator: the caller composes "\n\n---\n" when (and
 // only when) there is preceding prose to separate from. The
@@ -53,25 +55,62 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 	b.WriteString(label)
 	b.WriteString(":\n")
 	for _, c := range sorted {
-		inline := c.CharStart >= 0
-		marker := "block"
-		if inline {
-			marker = "inline"
-		}
-		excerpt := c.Source
-		if !inline && c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
-			excerpt = blocks[c.BlockIdx].Source
-		}
-		// Flatten newlines/tabs so the excerpt stays on one line —
-		// the appendix contract is "- marker \"excerpt\" (lines): text\n".
-		excerpt = strings.TrimSpace(strings.NewReplacer("\n", " ", "\t", " ").Replace(excerpt))
-		excerpt = truncate(excerpt, excerptLimit)
+		marker, excerpt, lineRange := formatEntry(c, blocks)
 
 		b.WriteString("- ")
 		b.WriteString(marker)
 		b.WriteString(" \"")
 		b.WriteString(excerpt)
 		b.WriteString("\"")
+		b.WriteString(lineRange)
+		b.WriteString(": ")
+		b.WriteString(c.Text)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// formatEntry returns the marker, excerpt, and "(lines ...)" /
+// "(line ...)" segment for a single comment. Block-kind comments
+// pull their excerpt + line range from the rendered message's
+// blocks; file-kind comments use the comment's own Path and line
+// fields. The lineRange is "" when no range is available.
+func formatEntry(c Comment, blocks []Block) (marker, excerpt, lineRange string) {
+	inline := c.IsInlineSelection()
+	var b strings.Builder
+	switch c.Kind {
+	case CommentFile:
+		if inline {
+			marker = "file-inline"
+			excerpt = flatten(c.Source)
+		} else {
+			marker = "file"
+			excerpt = c.Path
+		}
+		if c.LineStart > 0 {
+			if c.LineStart == c.LineEnd {
+				b.WriteString(" (line ")
+				b.WriteString(strconv.Itoa(c.LineStart))
+				b.WriteString(")")
+			} else {
+				b.WriteString(" (lines ")
+				b.WriteString(strconv.Itoa(c.LineStart))
+				b.WriteString("-")
+				b.WriteString(strconv.Itoa(c.LineEnd))
+				b.WriteString(")")
+			}
+		}
+	default: // CommentBlock (zero value preserves legacy behaviour)
+		if inline {
+			marker = "inline"
+		} else {
+			marker = "block"
+		}
+		excerpt = c.Source
+		if !inline && c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
+			excerpt = blocks[c.BlockIdx].Source
+		}
+		excerpt = flatten(excerpt)
 		if c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
 			if inline {
 				b.WriteString(" (line ")
@@ -85,9 +124,15 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 				b.WriteString(")")
 			}
 		}
-		b.WriteString(": ")
-		b.WriteString(c.Text)
-		b.WriteByte('\n')
 	}
-	return b.String()
+	excerpt = truncate(excerpt, excerptLimit)
+	return marker, excerpt, b.String()
+}
+
+// flatten trims and collapses internal newlines / tabs so the
+// excerpt fits on one line per the appendix contract.
+func flatten(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return strings.TrimSpace(s)
 }

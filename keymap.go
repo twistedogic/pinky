@@ -15,6 +15,7 @@ import (
 type keyMap struct {
 	// Shared
 	Help key.Binding // ?
+	Tab  key.Binding // tab — toggle message / file review tab
 
 	// Picker
 	Up       key.Binding // k, ↑
@@ -34,6 +35,22 @@ type keyMap struct {
 	NavRefresh   key.Binding // r
 	NavQuit      key.Binding // q
 
+	// File nav (stateFileNav).
+	FileNavUp      key.Binding // k, ↑
+	FileNavDown    key.Binding // j, ↓
+	FileNavCollapse key.Binding // h
+	FileNavExpand   key.Binding // l
+	FileNavOpen    key.Binding // enter
+	FileNavComment key.Binding // c
+	FileNavBack    key.Binding // esc
+
+	// File view (stateFileView).
+	FileViewUp     key.Binding // k, ↑
+	FileViewDown   key.Binding // j, ↓
+	FileViewVisual key.Binding // v
+	FileViewComment key.Binding // c
+	FileViewBack   key.Binding // esc
+
 	// Compose
 	Newline         key.Binding // enter
 	Cancel          key.Binding // esc
@@ -52,6 +69,10 @@ var defaultKeyMap = keyMap{
 	Help: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "toggle help"),
+	),
+	Tab: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "switch tab"),
 	),
 
 	// Picker
@@ -112,6 +133,58 @@ var defaultKeyMap = keyMap{
 	NavQuit: key.NewBinding(
 		key.WithKeys("q"),
 		key.WithHelp("q", "quit pinky"),
+	),
+
+	// File nav
+	FileNavUp: key.NewBinding(
+		key.WithKeys("k", "up"),
+		key.WithHelp("↑/k", "up"),
+	),
+	FileNavDown: key.NewBinding(
+		key.WithKeys("j", "down"),
+		key.WithHelp("↓/j", "down"),
+	),
+	FileNavCollapse: key.NewBinding(
+		key.WithKeys("h"),
+		key.WithHelp("h", "collapse / parent"),
+	),
+	FileNavExpand: key.NewBinding(
+		key.WithKeys("l"),
+		key.WithHelp("l", "expand / child"),
+	),
+	FileNavOpen: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("⏎", "open / toggle"),
+	),
+	FileNavComment: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "comment file"),
+	),
+	FileNavBack: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "back"),
+	),
+
+	// File view
+	FileViewUp: key.NewBinding(
+		key.WithKeys("k", "up"),
+		key.WithHelp("↑/k", "up"),
+	),
+	FileViewDown: key.NewBinding(
+		key.WithKeys("j", "down"),
+		key.WithHelp("↓/j", "down"),
+	),
+	FileViewVisual: key.NewBinding(
+		key.WithKeys("v"),
+		key.WithHelp("v", "visual"),
+	),
+	FileViewComment: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "comment"),
+	),
+	FileViewBack: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "back"),
 	),
 
 	// Compose

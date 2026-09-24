@@ -146,7 +146,7 @@ func Open(tmuxPane string) (Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	cwd, _ := paneCwd(tmuxPane) // best-effort; cwd-based discovery is one of several fallbacks
+	cwd, _ := PaneCwd(tmuxPane) // best-effort; cwd-based discovery is one of several fallbacks
 	switch agent.name {
 	case "pi":
 		return openPi(agent.pid, cwd)
@@ -157,10 +157,12 @@ func Open(tmuxPane string) (Source, error) {
 	}
 }
 
-// paneCwd returns the current working directory of the given tmux pane,
+// PaneCwd returns the current working directory of the given tmux pane,
 // via `tmux display-message -p '#{pane_current_path}'`. Empty string on
 // error (caller should treat as "cwd unknown" rather than failing).
-func paneCwd(tmuxPane string) (string, error) {
+// Exported so the TUI model can display the workspace root for the
+// file review tab.
+func PaneCwd(tmuxPane string) (string, error) {
 	out, err := exec.Command("tmux", "display-message", "-t", tmuxPane, "-p", "#{pane_current_path}").Output()
 	if err != nil {
 		return "", err

@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -16,6 +18,7 @@ import (
 	"github.com/twistedogic/pinky/internal/inject"
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
+	"github.com/twistedogic/pinky/internal/workspace"
 )
 
 const (
@@ -32,6 +35,8 @@ const (
 	stateNav
 	stateCompose
 	stateCommentComposer
+	stateFileNav
+	stateFileView
 	stateError
 )
 
@@ -41,10 +46,48 @@ type sessionMsg struct {
 }
 
 // commentAnchor captures the target for a comment being composed.
+// For block-kind anchors blockIdx, charA, charC are valid (with
+// charA < 0 meaning a whole-block comment). For file-kind anchors
+// filePath, lineStart, lineEnd are valid; charA/charC carry an
+// optional inline byte range (charA < 0 means a line-range
+// comment).
 type commentAnchor struct {
-	blockIdx int
-	charA    int
-	charC    int
+	kind      render.CommentKind
+	blockIdx  int
+	charA     int
+	charC     int
+	filePath  string
+	lineStart int
+	lineEnd   int
+}
+
+// tab identifies the active top-level view.
+type tab int
+
+const (
+	tabMessage tab = iota
+	tabFiles
+)
+
+// fileSelection is the file viewer's visual selection range. All
+// values are 1-based; LineA/LineC index source lines, CharA/CharC
+// are byte offsets into the corresponding line.
+type fileSelection struct {
+	LineA, CharA int
+	LineC, CharC int
+	Active       bool
+}
+
+// fileViewer holds the state for stateFileView: the raw content,
+// the line index (parallel to lines, drives gutter flags), the
+// cursor (line + char), and an optional visual selection.
+type fileViewer struct {
+	path      string
+	content   string
+	lines     []string // raw lines, no trailing newline
+	cursor    int      // 1-based line index
+	visual    fileSelection
+	lineIndex []render.FileLine // parallel to lines
 }
 
 type model struct {
@@ -87,6 +130,24 @@ type model struct {
 	// includeComments toggles whether the next redirect will append
 	// the comments appendix. Toggled by Ctrl+I in compose mode.
 	includeComments bool
+
+	// Tab state. m.tab records which top-level view is active;
+	// m.fileReturn remembers the file-review sub-state the user
+	// left, so Tab round-trips restore it.
+	tab        tab
+	fileReturn state
+
+	// File review tab state. fileEntries is the raw walker output;
+	// the model layer applies the collapse map at render time to
+	// produce the visible tree. fileCursor indexes into the
+	// visible tree (after collapse).
+	fileEntries   []workspace.Entry
+	fileCursor    int
+	fileCollapsed map[string]bool
+	fileRoot      string
+
+	// fileViewer is the state for stateFileView.
+	fileViewer fileViewer
 
 	// commentTa is the textarea used by stateCommentComposer; kept
 	// separate from m.textarea (the redirect composer) so state
@@ -206,6 +267,14 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	m.state = stateNav
 	m.refreshViewport()
 	m.comments = nil
+
+	// Best-effort: record the pane's cwd for the file review tab.
+	// Empty on failure (--session-file path, or no tmux server).
+	if pane != "" && pane != "(explicit)" {
+		if cwd, err := session.PaneCwd(pane); err == nil {
+			m.fileRoot = cwd
+		}
+	}
 }
 
 // attach opens a session source + history for the given pane.
@@ -335,6 +404,19 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Tab toggles the message / file-review tab. Active in every
+	// state except stateCommentComposer (let the textarea eat it),
+	// statePicking (no agent yet), and stateError.
+	if key.Matches(msg, defaultKeyMap.Tab) {
+		switch m.state {
+		case stateCommentComposer, statePicking, stateError:
+			// swallowed
+		default:
+			m.toggleTab()
+		}
+		return m, nil
+	}
+
 	switch m.state {
 	case statePicking:
 		return m.handlePickerKey(msg)
@@ -344,6 +426,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleComposeKey(msg)
 	case stateCommentComposer:
 		return m.handleCommentComposerKey(msg)
+	case stateFileNav:
+		return m.handleFileNavKey(msg)
+	case stateFileView:
+		return m.handleFileViewKey(msg)
 	case stateError:
 		// Any key dismisses the error and quits.
 		if key.Matches(msg, defaultKeyMap.QuitError) {
@@ -352,6 +438,65 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// toggleTab switches between the message tab and the file review
+// tab, remembering / restoring the sub-state so Tab round-trips are
+// cheap.
+func (m *model) toggleTab() {
+	switch m.tab {
+	case tabMessage:
+		// Remember the message sub-state so Tab back returns to it.
+		m.fileReturn = m.state
+		m.tab = tabFiles
+		if len(m.fileEntries) == 0 {
+			m.enterFileNav()
+		} else {
+			m.state = stateFileNav
+		}
+		m.reflow()
+	case tabFiles:
+		m.tab = tabMessage
+		restore := m.fileReturn
+		if restore != stateNav && restore != stateCompose {
+			restore = stateNav
+		}
+		m.state = restore
+		m.fileViewer.visual.Active = false
+		m.reflow()
+		m.refreshViewport()
+	}
+}
+
+// enterFileNav runs the workspace walker against m.fileRoot and
+// transitions to stateFileNav.
+func (m *model) enterFileNav() {
+	if m.fileRoot == "" {
+		m.state = stateNav
+		m.latest = session.Message{
+			Role: session.RoleUser,
+			Text: "[no workspace: pane cwd unavailable]",
+		}
+		m.refreshViewport()
+		return
+	}
+	entries, err := workspace.Walk(m.fileRoot)
+	if err != nil {
+		m.state = stateNav
+		m.latest = session.Message{
+			Role: session.RoleUser,
+			Text: "[workspace walk failed: " + err.Error() + "]",
+		}
+		m.refreshViewport()
+		return
+	}
+	m.fileEntries = entries
+	m.fileCursor = 0
+	if m.fileCollapsed == nil {
+		m.fileCollapsed = make(map[string]bool)
+	}
+	m.state = stateFileNav
+	m.reflow()
 }
 
 // enterCompose transitions to compose mode with the textarea reset
@@ -447,15 +592,28 @@ func (m *model) saveComment() {
 		m.cancelCommentComposer()
 		return
 	}
-	idx := m.commentAnchor.blockIdx
+	a := m.commentAnchor
+	switch a.kind {
+	case render.CommentFile:
+		m.saveFileComment(a, text)
+	default:
+		m.saveBlockComment(a, text)
+	}
+	m.commentTa.Blur()
+}
+
+// saveBlockComment is the existing block-kind path, factored out
+// of saveComment so saveComment can route by anchor kind.
+func (m *model) saveBlockComment(a commentAnchor, text string) {
+	idx := a.blockIdx
 	if idx < 0 || idx >= len(m.blocks) {
 		m.cancelCommentComposer()
 		return
 	}
 	src := ""
 	cs, ce := -1, -1
-	if m.commentAnchor.charA >= 0 {
-		cs, ce = m.commentAnchor.charA, m.commentAnchor.charC
+	if a.charA >= 0 {
+		cs, ce = a.charA, a.charC
 		if cs > ce {
 			cs, ce = ce, cs
 		}
@@ -472,6 +630,7 @@ func (m *model) saveComment() {
 		src = bsrc[cs:ce]
 	}
 	c := render.Comment{
+		Kind:      render.CommentBlock,
 		BlockIdx:  idx,
 		CharStart: cs,
 		CharEnd:   ce,
@@ -480,10 +639,75 @@ func (m *model) saveComment() {
 		CreatedAt: time.Now(),
 	}
 	m.comments = append(m.comments, c)
-	m.commentTa.Blur()
 	m.state = stateNav
 	m.reflow()
 	m.refreshViewport()
+}
+
+// saveFileComment handles file-kind anchors: whole-file line-range
+// (charA < 0) or inline byte-range (charA >= 0) comments.
+func (m *model) saveFileComment(a commentAnchor, text string) {
+	if a.filePath == "" {
+		m.cancelCommentComposer()
+		return
+	}
+	src := ""
+	cs, ce := -1, -1
+	if a.charA >= 0 {
+		cs, ce = a.charA, a.charC
+		if cs > ce {
+			cs, ce = ce, cs
+		}
+		if cs < 0 {
+			cs = 0
+		}
+		if cs > len(m.fileViewer.content) {
+			cs = len(m.fileViewer.content)
+		}
+		if ce > len(m.fileViewer.content) {
+			ce = len(m.fileViewer.content)
+		}
+		src = m.fileViewer.content[cs:ce]
+	}
+	c := render.Comment{
+		Kind:      render.CommentFile,
+		Path:      a.filePath,
+		LineStart: a.lineStart,
+		LineEnd:   a.lineEnd,
+		CharStart: cs,
+		CharEnd:   ce,
+		Source:    src,
+		Text:      text,
+		CreatedAt: time.Now(),
+	}
+	m.comments = append(m.comments, c)
+	// Re-render the file viewer so the new comment shows the
+	// yellow gutter.
+	m.refreshFileViewer()
+	m.state = m.fileReturnAfterComment()
+	m.reflow()
+}
+
+// fileReturnAfterComment returns the file-review state to return
+// to after saving a file-kind comment (file viewer when the anchor
+// came from there, dir nav otherwise).
+func (m *model) fileReturnAfterComment() state {
+	if m.fileViewer.path != "" && m.fileViewer.path == m.commentAnchor.filePath {
+		return stateFileView
+	}
+	return stateFileNav
+}
+
+// refreshFileViewer re-runs RenderFile for the current viewer
+// to refresh the lineIndex (HasComment flags), after a comment
+// was added that targets this file. The rendered string itself
+// is built fresh in fileViewView — no string cache.
+func (m *model) refreshFileViewer() {
+	if m.fileViewer.path == "" {
+		return
+	}
+	_, idx := render.RenderFile(m.fileViewer.content, m.fileCommentsFor(m.fileViewer.path))
+	m.fileViewer.lineIndex = idx
 }
 
 func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -558,6 +782,352 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var vpCmd tea.Cmd
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	return m, vpCmd
+}
+
+// visibleFileEntries returns the slice of entries shown after the
+// current collapse state is applied. The cursor (fileCursor) is an
+// index into this slice.
+func (m *model) visibleFileEntries() []workspace.Entry {
+	if len(m.fileEntries) == 0 {
+		return nil
+	}
+	// Walk entries in order; for each directory at depth > 0, skip
+	// its descendants when the dir's relative path is collapsed.
+	// Depth 0 (the root ".") is never collapsed.
+	skipBelow := -1 // -1 means "don't skip anything"
+	out := make([]workspace.Entry, 0, len(m.fileEntries))
+	for _, e := range m.fileEntries {
+		if skipBelow >= 0 && e.Depth > skipBelow {
+			continue
+		}
+		skipBelow = -1
+		out = append(out, e)
+		if e.IsDir && e.Depth > 0 && m.fileCollapsed[e.Path] {
+			// Skip descendants until we see a sibling at the same
+			// or shallower depth. We approximate with a sentinel
+			// that drops entries with depth > current dir depth.
+			skipBelow = e.Depth
+		}
+	}
+	return out
+}
+
+// handleFileNavKey routes keys in stateFileNav: j/k move the
+// cursor, h/l collapse/expand, Enter opens files / toggles
+// directories, c comments a file, s flushes, Esc / Tab return to
+// the message tab, q quits.
+func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	visible := m.visibleFileEntries()
+	if key.Matches(msg, defaultKeyMap.FileNavDown) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'j') {
+		if len(visible) > 0 {
+			m.fileCursor = (m.fileCursor + 1) % len(visible)
+		}
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.FileNavUp) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'k') {
+		if len(visible) > 0 {
+			m.fileCursor = (m.fileCursor - 1 + len(visible)) % len(visible)
+		}
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.FileNavCollapse) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'h') {
+		if len(visible) == 0 {
+			return m, nil
+		}
+		cur := visible[m.fileCursor]
+		if cur.IsDir && cur.Depth > 0 && !m.fileCollapsed[cur.Path] {
+			m.fileCollapsed[cur.Path] = true
+			return m, nil
+		}
+		// Otherwise jump to parent (first ancestor directory or
+		// the root).
+		for i := m.fileCursor - 1; i >= 0; i-- {
+			if visible[i].IsDir && visible[i].Depth < cur.Depth {
+				m.fileCursor = i
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.FileNavExpand) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'l') {
+		if len(visible) == 0 {
+			return m, nil
+		}
+		cur := visible[m.fileCursor]
+		if cur.IsDir && cur.Depth > 0 && m.fileCollapsed[cur.Path] {
+			delete(m.fileCollapsed, cur.Path)
+			return m, nil
+		}
+		// Jump to first child if the dir is expanded.
+		if cur.IsDir {
+			for i := m.fileCursor + 1; i < len(visible); i++ {
+				if visible[i].Depth == cur.Depth+1 {
+					m.fileCursor = i
+					return m, nil
+				}
+			}
+		}
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.FileNavOpen) || msg.Type == tea.KeyEnter {
+		if len(visible) == 0 {
+			return m, nil
+		}
+		cur := visible[m.fileCursor]
+		if cur.IsDir {
+			if cur.Depth == 0 {
+				return m, nil
+			}
+			m.fileCollapsed[cur.Path] = !m.fileCollapsed[cur.Path]
+			return m, nil
+		}
+		// File → open viewer.
+		m.openFileViewer(cur.Path)
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.FileNavComment) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'c') {
+		if len(visible) == 0 {
+			return m, nil
+		}
+		cur := visible[m.fileCursor]
+		if cur.IsDir {
+			return m, nil
+		}
+		// Whole-file comment anchor.
+		m.commentAnchor = commentAnchor{
+			kind:      render.CommentFile,
+			filePath:  cur.Path,
+			lineStart: 1,
+			lineEnd:   m.fileLineCount(cur.Path),
+		}
+		m.enterCommentComposer(m.commentAnchor)
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.FileNavBack) || msg.Type == tea.KeyEsc {
+		m.toggleTab()
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.NavSend) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's') {
+		m.handleSend()
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.NavQuit) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q') {
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// fileLineCount returns the number of source lines in path, or 1
+// if the file can't be read (a comment on an unreadable file still
+// has a valid anchor).
+func (m *model) fileLineCount(path string) int {
+	full := m.fileRoot + "/" + path
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return 1
+	}
+	if len(data) == 0 {
+		return 1
+	}
+	return strings.Count(string(data), "\n") + 1
+}
+
+// openFileViewer loads path's content and transitions to
+// stateFileView.
+func (m *model) openFileViewer(path string) {
+	full := m.fileRoot + "/" + path
+	data, err := os.ReadFile(full)
+	if err != nil {
+		m.latest = session.Message{
+			Role: session.RoleUser,
+			Text: "[file read failed: " + err.Error() + "]",
+		}
+		m.refreshViewport()
+		return
+	}
+	content := string(data)
+	_, idx := render.RenderFile(content, m.fileCommentsFor(path))
+	m.fileViewer = fileViewer{
+		path:      path,
+		content:   content,
+		lines:     strings.Split(strings.TrimRight(content, "\n"), "\n"),
+		cursor:    1,
+		visual:    fileSelection{LineA: 1, CharA: 0, LineC: 1, CharC: 0},
+		lineIndex: idx,
+	}
+	m.state = stateFileView
+	m.reflow()
+}
+
+// fileCommentsFor returns the file-kind comments that target path.
+func (m *model) fileCommentsFor(path string) []render.Comment {
+	var out []render.Comment
+	for _, c := range m.comments {
+		if c.Kind == render.CommentFile && c.Path == path {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// handleFileViewKey routes keys in stateFileView: j/k move the
+// line cursor, v enters visual, h/l extend visual cursor by rune,
+// c opens the comment composer, s flushes, Esc returns to dir nav,
+// Tab returns to message tab.
+func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Esc is handled before rune routing so visual-mode exit feels
+	// like the message viewer's.
+	if msg.Type == tea.KeyEsc {
+		if m.fileViewer.visual.Active {
+			m.fileViewer.visual.Active = false
+			return m, nil
+		}
+		m.state = stateFileNav
+		m.reflow()
+		return m, nil
+	}
+
+	if key.Matches(msg, defaultKeyMap.FileNavBack) && msg.Type != tea.KeyEsc {
+		m.state = stateFileNav
+		m.reflow()
+		return m, nil
+	}
+
+	switch {
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
+		return m, tea.Quit
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's':
+		m.handleSend()
+		return m, nil
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'v':
+		m.fileViewer.visual.Active = !m.fileViewer.visual.Active
+		if m.fileViewer.visual.Active {
+			line := m.fileViewer.cursor
+			m.fileViewer.visual.LineA = line
+			m.fileViewer.visual.CharA = 0
+			m.fileViewer.visual.LineC = line
+			m.fileViewer.visual.CharC = 0
+		}
+		return m, nil
+	}
+
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'j' {
+		m.fileViewMoveLine(+1)
+		return m, nil
+	}
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'k' {
+		m.fileViewMoveLine(-1)
+		return m, nil
+	}
+
+	// h / l: rune-granular in visual mode, no-op outside.
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'l' {
+		if m.fileViewer.visual.Active {
+			m.fileViewMoveRune(+1)
+			return m, nil
+		}
+	}
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'h' {
+		if m.fileViewer.visual.Active {
+			m.fileViewMoveRune(-1)
+			return m, nil
+		}
+	}
+
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'c' {
+		m.openFileComment()
+		return m, nil
+	}
+	return m, nil
+}
+
+// fileViewMoveLine moves the cursor line by delta, extending the
+// visual selection if active (charA snaps to 0, charC snaps to the
+// end of the destination line).
+func (m *model) fileViewMoveLine(delta int) {
+	max := len(m.fileViewer.lines)
+	if max == 0 {
+		return
+	}
+	next := m.fileViewer.cursor + delta
+	if next < 1 {
+		next = 1
+	}
+	if next > max {
+		next = max
+	}
+	m.fileViewer.cursor = next
+	if m.fileViewer.visual.Active {
+		v := &m.fileViewer.visual
+		v.LineC = next
+		// When extending the line range with j/k, snap the anchor
+		// charA to the start of the first selected line and charC
+		// to the end of the last selected line. Compute both ends
+		// from the line endpoints regardless of delta direction.
+		v.CharA = 0
+		v.CharC = len(m.fileViewer.lines[next-1])
+	}
+}
+
+// fileViewMoveRune moves the visual-mode cursor one rune within
+// the current line. No-op when visual is inactive.
+func (m *model) fileViewMoveRune(delta int) {
+	if !m.fileViewer.visual.Active {
+		return
+	}
+	lineIdx := m.fileViewer.cursor - 1
+	if lineIdx < 0 || lineIdx >= len(m.fileViewer.lines) {
+		return
+	}
+	line := m.fileViewer.lines[lineIdx]
+	c := m.fileViewer.visual.CharC
+	if delta > 0 {
+		if c >= len(line) {
+			return
+		}
+		_, sz := utf8.DecodeRuneInString(line[c:])
+		c += sz
+	} else {
+		if c <= 0 {
+			return
+		}
+		_, sz := utf8.DecodeLastRuneInString(line[:c])
+		c -= sz
+	}
+	m.fileViewer.visual.CharC = c
+}
+
+// openFileComment opens the comment composer with an anchor from
+// the current cursor / visual selection. No selection → whole
+// file; visual mode line-range → line range; visual mode inline
+// selection → char range on a single line (or char range across
+// the snapped line endpoints).
+func (m *model) openFileComment() {
+	fv := &m.fileViewer
+	a := commentAnchor{
+		kind:     render.CommentFile,
+		filePath: fv.path,
+	}
+	if fv.visual.Active {
+		a.lineStart, a.lineEnd = fv.visual.LineA, fv.visual.LineC
+		if a.lineStart > a.lineEnd {
+			a.lineStart, a.lineEnd = a.lineEnd, a.lineStart
+		}
+		// Snap char endpoints if they look un-snapped (visual just
+		// toggled without movement). Treat as whole-line range.
+		if a.lineStart == a.lineEnd && fv.visual.CharA != fv.visual.CharC {
+			a.charA = fv.visual.CharA
+			a.charC = fv.visual.CharC
+			if a.charA > a.charC {
+				a.charA, a.charC = a.charC, a.charA
+			}
+		}
+	} else {
+		a.lineStart = 1
+		a.lineEnd = len(fv.lines)
+	}
+	m.commentAnchor = a
+	m.enterCommentComposer(a)
 }
 
 // buildCommentAnchor assembles the (block, charA, charC) for the next
@@ -685,6 +1255,7 @@ func (m model) ShortHelp() []key.Binding {
 		return []key.Binding{
 			defaultKeyMap.NavComment,
 			defaultKeyMap.NavSend,
+			defaultKeyMap.Tab,
 			defaultKeyMap.Help,
 		}
 	case stateCompose:
@@ -696,6 +1267,22 @@ func (m model) ShortHelp() []key.Binding {
 		return []key.Binding{
 			defaultKeyMap.SaveComment,
 			defaultKeyMap.Cancel,
+		}
+	case stateFileNav:
+		return []key.Binding{
+			defaultKeyMap.FileNavOpen,
+			defaultKeyMap.FileNavComment,
+			defaultKeyMap.NavSend,
+			defaultKeyMap.Tab,
+			defaultKeyMap.Help,
+		}
+	case stateFileView:
+		return []key.Binding{
+			defaultKeyMap.FileViewComment,
+			defaultKeyMap.NavSend,
+			defaultKeyMap.FileNavBack,
+			defaultKeyMap.Tab,
+			defaultKeyMap.Help,
 		}
 	case stateError:
 		return []key.Binding{defaultKeyMap.QuitError}
@@ -719,7 +1306,7 @@ func (m model) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{defaultKeyMap.NavBlockDown, defaultKeyMap.NavBlockUp, defaultKeyMap.NavRuneLeft, defaultKeyMap.NavRuneRight},
 			{defaultKeyMap.NavVisual, defaultKeyMap.NavComment, defaultKeyMap.NavSend, defaultKeyMap.NavCompose, defaultKeyMap.NavRefresh},
-			{defaultKeyMap.NavQuit, defaultKeyMap.Help},
+			{defaultKeyMap.Tab, defaultKeyMap.NavQuit, defaultKeyMap.Help},
 		}
 	case stateCompose:
 		return [][]key.Binding{
@@ -731,6 +1318,18 @@ func (m model) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{defaultKeyMap.SaveComment},
 			{defaultKeyMap.Cancel},
+		}
+	case stateFileNav:
+		return [][]key.Binding{
+			{defaultKeyMap.FileNavDown, defaultKeyMap.FileNavUp, defaultKeyMap.FileNavCollapse, defaultKeyMap.FileNavExpand},
+			{defaultKeyMap.FileNavOpen, defaultKeyMap.FileNavComment, defaultKeyMap.NavSend},
+			{defaultKeyMap.FileNavBack, defaultKeyMap.Tab, defaultKeyMap.Help},
+		}
+	case stateFileView:
+		return [][]key.Binding{
+			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp},
+			{defaultKeyMap.FileViewVisual, defaultKeyMap.FileViewComment, defaultKeyMap.NavSend},
+			{defaultKeyMap.FileViewBack, defaultKeyMap.Tab, defaultKeyMap.Help},
 		}
 	case stateError:
 		return [][]key.Binding{
@@ -761,6 +1360,13 @@ var visualModeStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("232")).
 	Background(lipgloss.Color("51")).
 	Bold(true).
+	Padding(0, 1)
+
+// tabChipStyle is the dim accent used for the active-tab chip in
+// the status line ("msg" / "files"). Kept dim so it doesn't
+// compete with the [VISUAL] chip or the pane line.
+var tabChipStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("241")).
 	Padding(0, 1)
 
 func (m *model) refreshViewport() {
@@ -806,6 +1412,18 @@ func (m model) View() string {
 		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.commentTa.View(),
+			helpView,
+			m.statusLine(),
+		))
+	case stateFileNav:
+		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			m.fileNavView(),
+			helpView,
+			m.statusLine(),
+		))
+	case stateFileView:
+		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			m.fileViewView(),
 			helpView,
 			m.statusLine(),
 		))
@@ -864,6 +1482,134 @@ func (m model) errorView() string {
 		bodyStyle.Render(m.err.Error())
 }
 
+// fileNavView renders the workspace tree. The cursor entry gets a
+// ▶ marker and a brighter style; other entries are dim. Directories
+// are prefixed with ▾ (expanded) or ▸ (collapsed).
+func (m model) fileNavView() string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(fmt.Sprintf("workspace — %s", m.fileRoot)))
+	b.WriteByte('\n')
+
+	visible := m.visibleFileEntries()
+	if len(visible) == 0 {
+		b.WriteString(dimStyle.Render("(no entries)"))
+		return b.String()
+	}
+
+	for i, e := range visible {
+		marker := "  "
+		style := normalStyle
+		if i == m.fileCursor {
+			marker = "▶ "
+			style = selectedStyle
+		}
+		indent := strings.Repeat("  ", e.Depth)
+		var glyph string
+		if e.IsDir {
+			if e.Depth == 0 {
+				glyph = ""
+			} else if m.fileCollapsed[e.Path] {
+				glyph = "▸ "
+			} else {
+				glyph = "▾ "
+			}
+		}
+		name := e.Path
+		if e.IsDir {
+			// Show only the last segment for dirs.
+			if i := strings.LastIndex(name, "/"); i >= 0 {
+				name = name[i+1:]
+			} else if name == "." {
+				name = "."
+			}
+		}
+		line := fmt.Sprintf("%s%s%s%s", marker, indent, glyph, name)
+		b.WriteString(style.Render(line))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// fileViewView renders the current file's content with line
+// numbers, the yellow gutter on commented lines, and an inline
+// cyan highlight of the visual selection (if any) so the user can
+// see what their `c` will anchor against. Renders fresh each
+// call — no stored rendered string to drift out of sync.
+func (m model) fileViewView() string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	const yellow = "\x1b[38;5;228m"
+
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(fmt.Sprintf("file — %s", m.fileViewer.path)))
+	b.WriteByte('\n')
+
+	if len(m.fileViewer.lines) == 0 {
+		b.WriteString(dimStyle.Render("(empty file)"))
+		return b.String()
+	}
+	width := len(fmt.Sprintf("%d", len(m.fileViewer.lines)))
+	for i, content := range m.fileViewer.lines {
+		ln := i + 1
+		gutter := " "
+		if i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment {
+			gutter = yellow + "▍" + resetANSI
+		}
+		fmt.Fprintf(&b, "%s %*d  %s\n", gutter, width, ln, applySelection(content, ln, m.fileViewer.visual))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// applySelection splices cyan ANSI around the byte range of lineNo
+// that falls inside sel. Returns content unchanged when sel is
+// inactive or this line is outside the selection.
+func applySelection(line string, lineNo int, sel fileSelection) string {
+	if !sel.Active {
+		return line
+	}
+	la, lc := sel.LineA, sel.LineC
+	if la > lc {
+		la, lc = lc, la
+	}
+	if lineNo < la || lineNo > lc {
+		return line
+	}
+	var a, c int
+	switch {
+	case la == lc:
+		a, c = sel.CharA, sel.CharC
+	case lineNo == la:
+		a, c = sel.CharA, len(line)
+	case lineNo == lc:
+		a, c = 0, sel.CharC
+	default:
+		a, c = 0, len(line)
+	}
+	if a > c {
+		a, c = c, a
+	}
+	if a > len(line) {
+		a = len(line)
+	}
+	if c > len(line) {
+		c = len(line)
+	}
+	if a >= c {
+		return line
+	}
+	return line[:a] + selectionANSI + line[a:c] + resetANSI + line[c:]
+}
+
+const (
+	selectionANSI = "\x1b[38;5;51m"
+	resetANSI     = "\x1b[0m"
+)
+
 func (m model) pickerView() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
@@ -913,6 +1659,14 @@ func (m model) statusLine() string {
 	rendered := statusBarStyle.Render(text)
 	if m.nav.Visual == render.NavLine {
 		rendered += visualModeStyle.Render(" VISUAL ")
+	}
+	// Tab chip: always present so the user knows which tab is
+	// active. Dim style keeps it subordinate to the pane line.
+	switch m.tab {
+	case tabFiles:
+		rendered += " " + tabChipStyle.Render(" files ")
+	default:
+		rendered += " " + tabChipStyle.Render(" msg ")
 	}
 	return padRight(rendered, m.width)
 }

@@ -140,8 +140,49 @@ markdown. Within that message:
 | `s` | Send all accumulated comments in one tmux inject |
 | `n` | Enter compose mode |
 | `r` | Re-poll the agent session |
+| `Tab` | Switch to the file review tab |
 | `q` / `Ctrl+C` | Quit |
 | `?` | Toggle the keymap page |
+
+### File review tab
+
+The file review tab browses the agent pane's working directory
+(with `.gitignore` honoured) and lets you stage file-anchored
+comments. Pressing `Tab` from the message view enters the tab;
+pressing `Tab` again (or `Esc` from the dir navigator) returns
+to the message view, restoring the sub-state you left.
+
+#### Dir navigator
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `h` | Collapse current directory, or jump to parent entry |
+| `l` | Expand current directory, or jump to first child |
+| `Enter` | Open file / toggle directory collapse |
+| `c` | Comment on a file (whole-file anchor); no-op on a directory |
+| `s` | Send all accumulated comments (msg + file) in one tmux inject |
+| `Esc` / `Tab` | Return to the message view |
+| `?` | Toggle the keymap page |
+
+#### File viewer
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next line (visual: extend line range) |
+| `k` / `↑` | Previous line (visual: retract line range) |
+| `h` / `l` | Visual mode only: move cursor one rune on the current line |
+| `v` | Enter / exit visual selection |
+| `c` | Open the comment composer (whole file when no selection; line range or inline char range when visual is active) |
+| `s` | Send all accumulated comments |
+| `Esc` | Return to the dir navigator |
+| `Tab` | Switch to the message view |
+| `?` | Toggle the keymap page |
+
+Lines that carry at least one file-kind comment show a yellow
+`▍` in the left gutter; the active visual selection shows a
+cyan highlight on the byte range that `c` will anchor against.
 
 ### Compose
 
@@ -149,7 +190,7 @@ markdown. Within that message:
 |---|---|
 | `Enter` | Newline |
 | `i` | Toggle "include comments" appendix on the next send |
-| `s` | Send the redirect (appends comments appendix when toggle is on) |
+| `s` | Send the redirect (appends comments appendix when toggle is on; the appendix now mixes block-kind and file-kind comments) |
 | `Esc` | Cancel and return to nav |
 | `?` | Toggle the keymap page |
 
@@ -159,6 +200,13 @@ markdown. Within that message:
 |---|---|
 | `Enter` | Save comment and return to nav (does not send) |
 | `Esc` | Cancel draft and return to nav |
+
+When the anchor came from a file, the saved comment is a
+`file` or `file-inline` entry in the appendix:
+
+- `- file "<path>" (lines X-Y): <text>` — line-range comment
+- `- file-inline "<excerpt>" (line Z): <text>` — inline byte
+  selection from a visual-mode `c`
 
 ### Picker
 

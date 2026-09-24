@@ -130,6 +130,45 @@ func TestFormatCommentsAppendix_ExcerptTruncation(t *testing.T) {
 	}
 }
 
+// TestFormatCommentsAppendix_MixedKinds locks in the unified
+// appendix format: one block-kind and one file-kind comment, both
+// rendered in the same body, in chronological order.
+func TestFormatCommentsAppendix_MixedKinds(t *testing.T) {
+	now := time.Now()
+	blocks := []Block{{Kind: BlockParagraph, Source: "alpha", StartLine: 0, EndLine: 1}}
+	comments := []Comment{
+		{Kind: CommentBlock, BlockIdx: 0, CharStart: -1, Text: "rename alpha", CreatedAt: now},
+		{Kind: CommentFile, Path: "internal/foo.go", LineStart: 12, LineEnd: 24,
+			CharStart: -1, CharEnd: -1,
+			Text: "wrap with ctx", CreatedAt: now.Add(time.Second)},
+	}
+	got := FormatCommentsAppendix(comments, blocks)
+	for _, want := range []string{
+		"2 comments:",
+		"- block \"alpha\" (lines 0-1): rename alpha",
+		"- file \"internal/foo.go\" (lines 12-24): wrap with ctx",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in appendix; got:\n%s", want, got)
+		}
+	}
+}
+
+// TestFormatCommentsAppendix_FileInline covers the inline char
+// selection marker for file-kind comments.
+func TestFormatCommentsAppendix_FileInline(t *testing.T) {
+	comments := []Comment{
+		{Kind: CommentFile, Path: "internal/foo.go", LineStart: 5, LineEnd: 5,
+			CharStart: 4, CharEnd: 12, Source: "return e", Text: "wrap", CreatedAt: time.Now()},
+	}
+	got := FormatCommentsAppendix(comments, nil)
+	for _, want := range []string{"1 comment:", "file-inline", "\"return e\"", "(line 5)", "wrap"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in appendix; got:\n%s", want, got)
+		}
+	}
+}
+
 func TestItoa(t *testing.T) {
 	tests := map[int]string{0: "0", 1: "1", -1: "-1", 42: "42", 12345: "12345"}
 	for n, want := range tests {

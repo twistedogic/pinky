@@ -199,35 +199,71 @@ func lineCount(s string) int {
 	return strings.Count(s, "\n")
 }
 
-// Comment is a user-authored annotation attached to a block or to a
-// byte range within a block's source.
+// CommentKind discriminates which fields of Comment carry the
+// anchor. Block-kind comments anchor to a rendered block in the
+// latest agent message; file-kind comments anchor to a file path
+// and optional byte range in the agent's workspace.
+type CommentKind int
+
+const (
+	CommentBlock CommentKind = iota // existing — block-anchored
+	CommentFile                     // new — file-anchored
+)
+
+// Comment is a user-authored annotation attached either to a
+// rendered block in the agent's latest message or to a file in
+// the agent's workspace.
 //
-// Anchor shape:
+// Block-kind fields (CommentBlock):
 //   - BlockIdx: index into the []Block slice for the block this
 //     comment annotates.
 //   - CharStart, CharEnd: byte offsets into the block's Source. A
 //     block-level comment uses CharStart == CharEnd == -1 as a
-//     sentinel for "no inline range". An inline comment uses the
-//     goldmark AST node's Lines().At(i).Start/.Stop for the
-//     anchor line and the cursor line.
+//     sentinel for "no inline byte offsets". An inline comment
+//     uses the goldmark AST node's Lines().At(i).Start/.Stop for
+//     the anchor line and the cursor line.
 //
-// Source is the verbatim substring of the block's source for inline
-// comments (so the redirect appendix can quote the snippet without
-// re-parsing). For block-level comments Source is empty.
+// File-kind fields (CommentFile):
+//   - Path: relative path to the file under the agent pane's cwd.
+//   - LineStart, LineEnd: 1-based inclusive line range.
+//   - CharStart, CharEnd: byte offsets into the file's raw content
+//     for inline selections made via visual mode; -1 / -1 for
+//     line-range comments without an inline selection.
+//
+// Source is the verbatim substring of the anchored range
+// (block.Source or the file's raw content) for inline comments,
+// so the redirect appendix can quote the snippet without
+// re-reading the file. For line-range / block-level comments
+// Source is empty.
 type Comment struct {
+	Kind      CommentKind
 	BlockIdx  int
 	CharStart int
 	CharEnd   int
+	Path      string
+	LineStart int
+	LineEnd   int
 	Source    string
 	Text      string
 	CreatedAt time.Time
 }
 
-// Marker returns the gutter marker for a comment: "▸" for block-level
-// (CharStart < 0), "•" for inline. It is consumed by the footnote
-// line renderer (the ▸/• prefix on the comment's footnote). It no
-// longer feeds the in-block gutter marker; the model layer's
-// left-gutter replaces that visual.
+// IsBlock reports whether c is a block-kind comment.
+func (c Comment) IsBlock() bool { return c.Kind == CommentBlock }
+
+// IsFile reports whether c is a file-kind comment.
+func (c Comment) IsFile() bool { return c.Kind == CommentFile }
+
+// IsInlineSelection reports whether c carries a byte-range inline
+// selection (vs. a whole-block or whole-line range). Applies to
+// both block-kind and file-kind comments.
+func (c Comment) IsInlineSelection() bool { return c.CharStart >= 0 }
+
+// Marker returns the footnote marker for a comment: "▸" for
+// block-level (CharStart < 0), "•" for inline. It is consumed by
+// the footnote line renderer (the ▸/• prefix on the comment's
+// footnote). It no longer feeds the in-block gutter marker; the
+// model layer's left-gutter replaces that visual.
 func (c Comment) Marker() string {
 	if c.CharStart < 0 {
 		return "▸"
