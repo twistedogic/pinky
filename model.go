@@ -105,9 +105,13 @@ type model struct {
 	hist *history.History
 
 	// Latest-message view state. pinky always renders the most recent
-	// assistant message; older messages are not displayed.
-	latest session.Message
-	blocks []render.Block
+	// COMPLETE assistant message; older messages are not displayed.
+	// `latest` is committed at turn boundaries (an empty poll after a
+	// non-empty one). During streaming we accumulate the most recent
+	// assistant text in `pendingLatest` and leave `latest` untouched.
+	latest         session.Message
+	pendingLatest  session.Message
+	blocks         []render.Block
 
 	viewport viewport.Model
 	textarea textarea.Model
@@ -342,22 +346,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Width = msg.Width
 		m.reflow()
 		m.refreshViewport()
+		// reflow already re-anchors the file cursor; refresh the
+		// file viewport's cached content so it matches the new size.
+		if m.state == stateFileView && m.fileViewer.path != "" {
+			m.refreshFileView()
+		}
 		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
 	case sessionMsg:
+		// ponytail: every poll result must re-arm the next Tick,
+		// not just the error path. Without this the first poll
+		// delivers historical entries and polling stops — pinky
+		// never picks up new codex messages after attach.
 		if msg.err != nil {
 			return m, pollCmd(m.src)
 		}
 		if len(msg.entries) == 0 {
 			m.streaming = false
-			return m, nil
+			// ponytail: empty poll after a non-empty one means the
+			// previous turn just completed. Commit the most recent
+			// assistant text we buffered to `m.latest` so the view
+			// shows the LAST COMPLETE message — not the latest chunk
+			// of a still-streaming turn.
+			if m.pendingLatest.Text != "" && m.pendingLatest.Text != m.latest.Text {
+				m.latest = m.pendingLatest
+				m.pendingLatest = session.Message{}
+				m.comments = nil
+				m.refreshViewport()
+			}
+			return m, pollCmd(m.src)
 		}
-		// Find the latest assistant message in this poll. A user redirect
-		// arriving after the agent's last reply should NOT replace the
-		// view — we want the agent's most recent text, not the user's own.
+		// ponytail: don't replace m.latest on every streaming chunk.
+		// Buffer the latest assistant text in `pendingLatest` and
+		// only commit at the next empty poll (turn end).
 		var last *session.Message
 		for i := range msg.entries {
 			if msg.entries[i].Role == session.RoleAssistant {
@@ -365,26 +389,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if last != nil {
-			// ponytail: sticky-bottom — only GotoBottom when the user
-			// was already at the bottom. A genuinely new message
-			// (different Text) force-attaches so the new content is
-			// visible.
-			force := last.Text != m.latest.Text
-			wasAtBottom := force || m.viewport.AtBottom()
-			if force {
-				m.comments = nil
-			}
-			m.latest = *last
+			m.streaming = true
+			m.pendingLatest = *last
 			if m.hist != nil {
 				_ = m.hist.Append(string(last.Role), last.Text)
 			}
-			m.streaming = true
-			m.refreshViewport()
-			if wasAtBottom {
-				m.viewport.GotoBottom()
-			}
 		}
-		return m, nil
+		return m, pollCmd(m.src)
 	}
 
 	var cmds []tea.Cmd
@@ -692,8 +703,11 @@ func (m *model) saveFileComment(a commentAnchor, text string) {
 	}
 	m.comments = append(m.comments, c)
 	// Re-render the file viewer so the new comment shows the
-	// yellow gutter.
+	// yellow gutter. refreshFileViewer recomputes the lineIndex
+	// (HasComment flags); refreshFileView pushes the freshly
+	// rendered lines into the viewport cache.
 	m.refreshFileViewer()
+	m.refreshFileView()
 	m.state = m.fileReturnAfterComment()
 	m.reflow()
 }
@@ -710,8 +724,10 @@ func (m *model) fileReturnAfterComment() state {
 
 // refreshFileViewer re-runs RenderFile for the current viewer
 // to refresh the lineIndex (HasComment flags), after a comment
-// was added that targets this file. The rendered string itself
-// is built fresh in fileViewView — no string cache.
+// was added that targets this file. The rendered body itself is
+// cached in m.fileViewer.viewport (see refreshFileView), so
+// callers that want the new gutter to show on screen must also
+// call refreshFileView.
 func (m *model) refreshFileViewer() {
 	if m.fileViewer.path == "" {
 		return
@@ -997,6 +1013,7 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyEsc {
 		if m.fileViewer.visual.Active {
 			m.fileViewer.visual.Active = false
+			m.refreshFileView()
 			return m, nil
 		}
 		m.state = stateFileNav
@@ -1025,6 +1042,7 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.fileViewer.visual.LineC = line
 			m.fileViewer.visual.CharC = 0
 		}
+		m.refreshFileView()
 		return m, nil
 	}
 
@@ -1153,6 +1171,7 @@ func (m *model) fileViewMoveRune(delta int) {
 		c -= sz
 	}
 	m.fileViewer.visual.CharC = c
+	m.refreshFileView()
 }
 
 // openFileComment opens the comment composer with an anchor from
@@ -1278,6 +1297,12 @@ func (m *model) reflow() {
 	if m.fileViewer.path != "" {
 		m.fileViewer.viewport.Width = m.width
 		m.fileViewer.viewport.Height = vpHeight
+		// ponytail: every reflow that changes the file viewport
+		// size can leave the cursor's line off the new visible
+		// range — resize, help toggle (?), tab/state change all
+		// route through here. Re-pull the cursor into view once
+		// at the source instead of patching every caller.
+		m.scrollFileCursorIntoView()
 	}
 	if m.state == stateCompose || m.state == stateNav {
 		m.textarea.SetWidth(m.width)

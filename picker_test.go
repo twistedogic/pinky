@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -55,12 +54,15 @@ func TestSessionMsg_PrefersAssistantOverUser(t *testing.T) {
 		},
 	}
 	m := newIdleModel(t, src)
-	msg := sessionMsg{entries: []session.Message{
+	// ponytail: non-empty poll buffers into pendingLatest; the empty
+	// poll that follows is the turn-boundary signal that commits it.
+	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: "agent response"},
 		{Role: session.RoleUser, Text: "user redirect"},
-	}}
-	updated, _ := m.Update(msg)
+	}})
 	got := updated.(model)
+	updated, _ = got.Update(sessionMsg{entries: nil})
+	got = updated.(model)
 	if got.latest.Text != "agent response" {
 		t.Errorf("latest.Text = %q, want %q", got.latest.Text, "agent response")
 	}
@@ -92,17 +94,21 @@ func TestSessionMsg_FirstMessageRendersIntoViewport(t *testing.T) {
 		t.Errorf("placeholder expected before any message; got: %q", view)
 	}
 
-	// After sessionMsg, viewport should contain rendered content.
+	// ponytail: live streaming is buffered; the viewport stays on
+	// placeholder while the batch arrives. The empty poll that
+	// follows commits the buffered text and renders it.
 	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: "# Title\n\nbody"},
 	}})
 	got := updated.(model)
+	updated, _ = got.Update(sessionMsg{entries: nil})
+	got = updated.(model)
 	view = got.View()
 	if strings.Contains(view, "waiting for agent") {
-		t.Errorf("placeholder should be gone after message; got: %q", view)
+		t.Errorf("placeholder should be gone after turn-end; got: %q", view)
 	}
 	if got.latest.Text == "" {
-		t.Errorf("latest.Text should be set after message")
+		t.Errorf("latest.Text should be set after turn-end")
 	}
 }
 
@@ -125,8 +131,8 @@ func TestSessionMsg_AssistantOnlyPollSetsLatest(t *testing.T) {
 	}
 }
 
-// TestSessionMsg_TextChangeClearsComments verifies that when the
-// latest message text changes, the comments slice is reset.
+// TestSessionMsg_TextChangeClearsComments verifies that committing
+// a new message at a turn boundary resets the comments slice.
 func TestSessionMsg_TextChangeClearsComments(t *testing.T) {
 	src := &fakeSource{}
 	m := newIdleModel(t, src)
@@ -136,30 +142,35 @@ func TestSessionMsg_TextChangeClearsComments(t *testing.T) {
 		{BlockIdx: 0, Text: "old comment"},
 	}
 
-	// New message arrives.
+	// ponytail: live streaming buffers; turn-end (empty poll) commits
+	// and is what clears the comments tied to the prior message.
 	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: "new message"},
 	}})
 	got := updated.(model)
+	if len(got.comments) != 1 {
+		t.Errorf("mid-stream poll should not clear comments; got %d", len(got.comments))
+	}
+	updated, _ = got.Update(sessionMsg{entries: nil})
+	got = updated.(model)
 	if len(got.comments) != 0 {
-		t.Errorf("comments should clear when latest text changes; got %d", len(got.comments))
+		t.Errorf("turn-end commit should clear comments; got %d", len(got.comments))
 	}
 }
 
-// TestSessionMsg_SameMsgKeepsComments verifies that identical
-// messages do not clear comments.
+// TestSessionMsg_SameMsgKeepsComments verifies that an empty poll
+// with no pending text does not clear comments (no turn-end commit).
 func TestSessionMsg_SameMsgKeepsComments(t *testing.T) {
 	src := &fakeSource{}
 	m := newIdleModel(t, src)
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "same"}
 	m.comments = []render.Comment{{BlockIdx: 0, Text: "kept"}}
 
-	updated, _ := m.Update(sessionMsg{entries: []session.Message{
-		{Role: session.RoleAssistant, Text: "same"},
-	}})
+	// Empty poll with nothing pending — no commit, comments stay.
+	updated, _ := m.Update(sessionMsg{entries: nil})
 	got := updated.(model)
 	if len(got.comments) != 1 {
-		t.Errorf("identical messages should not clear comments; got %d", len(got.comments))
+		t.Errorf("empty poll with no pending should not clear comments; got %d", len(got.comments))
 	}
 }
 
@@ -177,102 +188,75 @@ func longMsg() string {
 	return b.String()
 }
 
-// TestSessionMsg_StickyBottom_ReleasedOnScrollUp verifies that
-// after the user scrolls up, a poll with no new text does NOT
-// yank the viewport back to the bottom (the fix for the
-// scroll-up bug).
-func TestSessionMsg_StickyBottom_ReleasedOnScrollUp(t *testing.T) {
+// TestSessionMsg_EmptyPollPreservesYOffset: under buffered-mode
+// semantics an empty poll with nothing pending never touches
+// YOffset — regardless of where the user has scrolled. This
+// replaces the old sticky-bottom tests: there's no auto-scroll
+// pin to release, just "your scroll position is yours".
+func TestSessionMsg_EmptyPollPreservesYOffset(t *testing.T) {
 	m := newIdleModel(t, &fakeSource{})
 	text := longMsg()
 	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: text},
 	}})
 	got := updated.(model)
-	if !got.viewport.AtBottom() {
-		t.Fatalf("first poll should land at bottom; YOffset=%d", got.viewport.YOffset)
+	updated, _ = got.Update(sessionMsg{entries: nil})
+	got = updated.(model)
+
+	maxOff := got.viewport.TotalLineCount() - got.viewport.Height
+	if maxOff < 6 {
+		t.Fatalf("test fixture too short to scroll; maxOff=%d", maxOff)
 	}
 
-	// User scrolls up by 5 lines.
-	got.viewport.SetYOffset(got.viewport.YOffset - 5)
+	// Simulate "user is at the bottom, then scrolls up 5 lines".
+	got.viewport.SetYOffset(maxOff - 5)
 	upOff := got.viewport.YOffset
 	if upOff <= 0 {
-		t.Fatalf("scroll-up should leave YOffset > 0; got %d", upOff)
+		t.Fatalf("setup: scroll-up should leave YOffset > 0; got %d", upOff)
 	}
 
-	// Poll with same text — must not move YOffset.
-	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
-		{Role: session.RoleAssistant, Text: text},
-	}})
+	// Empty poll — must not move YOffset.
+	updated2, _ := got.Update(sessionMsg{entries: nil})
 	got2 := updated2.(model)
 	if got2.viewport.YOffset != upOff {
-		t.Errorf("scrolled-up YOffset changed after poll: was %d, now %d",
-			upOff, got2.viewport.YOffset)
+		t.Errorf("empty poll moved YOffset: was %d, now %d", upOff, got2.viewport.YOffset)
 	}
 }
 
-// TestSessionMsg_StickyBottom_ReattachOnEnd verifies that pressing
-// End (which scrolls the viewport to the bottom) re-anchors the
-// sticky-bottom pin, so the next poll resumes auto-follow.
-func TestSessionMsg_StickyBottom_ReattachOnEnd(t *testing.T) {
+// TestSessionMsg_StreamingPollDoesNotMoveViewport: a non-empty
+// poll buffers the new turn into pendingLatest but does NOT call
+// refreshViewport, so YOffset is untouched. The commit on the
+// following empty poll DOES call refreshViewport (SetContent), which
+// Bubble Tea's viewport resets to 0 — landing the user at the top of
+// the new turn, the whole-message view they asked for.
+func TestSessionMsg_StreamingPollDoesNotMoveViewport(t *testing.T) {
 	m := newIdleModel(t, &fakeSource{})
 	text := longMsg()
 	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: text},
 	}})
 	got := updated.(model)
+	updated, _ = got.Update(sessionMsg{entries: nil})
+	got = updated.(model)
 
-	// Scroll up + poll (no reattach).
-	got.viewport.SetYOffset(got.viewport.YOffset - 3)
+	maxOff := got.viewport.TotalLineCount() - got.viewport.Height
+	got.viewport.SetYOffset(maxOff - 5)
 	upOff := got.viewport.YOffset
-	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
-		{Role: session.RoleAssistant, Text: text},
-	}})
-	got2 := updated2.(model)
-	if got2.viewport.YOffset != upOff {
-		t.Fatalf("setup: scrolled-up YOffset should stick; was %d now %d",
-			upOff, got2.viewport.YOffset)
-	}
 
-	// Press End to return to bottom, then poll — should reattach.
-	for !got2.viewport.AtBottom() {
-		updated3, _ := got2.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-		got2 = updated3.(model)
-	}
-	if !got2.viewport.AtBottom() {
-		t.Fatalf("PageDown should scroll to bottom; YOffset=%d", got2.viewport.YOffset)
-	}
-	updated4, _ := got2.Update(sessionMsg{entries: []session.Message{
-		{Role: session.RoleAssistant, Text: text},
-	}})
-	got4 := updated4.(model)
-	if !got4.viewport.AtBottom() {
-		t.Errorf("after returning to bottom, poll should stay at bottom; YOffset=%d", got4.viewport.YOffset)
-	}
-}
-
-// TestSessionMsg_NewTextForceAttaches verifies that a brand-new
-// message (different Text) force-scrolls to the bottom regardless
-// of prior scroll position.
-func TestSessionMsg_NewTextForceAttaches(t *testing.T) {
-	m := newIdleModel(t, &fakeSource{})
-	text := longMsg()
-	updated, _ := m.Update(sessionMsg{entries: []session.Message{
-		{Role: session.RoleAssistant, Text: text},
-	}})
-	got := updated.(model)
-
-	// Scroll up.
-	got.viewport.SetYOffset(got.viewport.YOffset - 5)
-	if got.viewport.YOffset <= 0 {
-		t.Fatalf("setup: scroll-up should leave YOffset > 0")
-	}
-
-	// New message replaces — must land at bottom.
+	// New turn streams in — buffered, viewport stays put.
 	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: "# Different\n\nbody"},
 	}})
 	got2 := updated2.(model)
-	if !got2.viewport.AtBottom() {
-		t.Errorf("new message should force bottom; YOffset=%d", got2.viewport.YOffset)
+	if got2.viewport.YOffset != upOff {
+		t.Errorf("streaming poll moved YOffset; was %d now %d",
+			upOff, got2.viewport.YOffset)
+	}
+	// Turn-end commit refreshes the viewport — YOffset goes to 0
+	// so the user sees the START of the new turn, not the bottom.
+	updated3, _ := got2.Update(sessionMsg{entries: nil})
+	got3 := updated3.(model)
+	if got3.viewport.YOffset != 0 {
+		t.Errorf("turn-end commit should land at top of new turn; YOffset=%d", got3.viewport.YOffset)
 	}
 }

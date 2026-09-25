@@ -499,3 +499,114 @@ func TestFileView_EndLandsAtBottom(t *testing.T) {
 		t.Errorf("End should scroll viewport to bottom; YOffset=%d", m.fileViewer.viewport.YOffset)
 	}
 }
+
+// TestFileView_VTogglesHighlight: pressing `v` then `l` must
+// make the viewport content include the cyan selection
+// highlight. Before the viewport refactor the renderer re-ran on
+// every View(); now the body lives in m.fileViewer.viewport's
+// cache, so both the `v` toggle and the `l` move must call
+// refreshFileView() to push the new selection into the cache.
+// `v` alone leaves the selection degenerate (CharA==CharC==0),
+// so we extend it with `l` to verify a real highlight range.
+func TestFileView_VTogglesHighlight(t *testing.T) {
+	root, rel := longFileFixture(t, 3)
+	m := openFileInFixture(t, root, rel)
+	before := m.fileViewer.viewport.View()
+	if strings.Contains(before, "\x1b[38;5;51m") {
+		t.Fatalf("setup: highlight already present before `v`")
+	}
+	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	mv := upd.(model)
+	if !mv.fileViewer.visual.Active {
+		t.Fatalf("visual mode should be active after `v`")
+	}
+	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	mv = upd.(model)
+	if mv.fileViewer.visual.CharC == 0 {
+		t.Fatalf("setup: `l` should have advanced CharC from 0")
+	}
+	after := mv.fileViewer.viewport.View()
+	if !strings.Contains(after, "\x1b[38;5;51m") {
+		t.Errorf("expected cyan selection highlight after `v` then `l`; got:\n%s", after)
+	}
+}
+
+// TestFileView_EscClearsVisualHighlight: pressing `v` then `l`
+// to make a non-degenerate selection, then Esc, must remove the
+// cyan selection highlight from the viewport's cached content.
+func TestFileView_EscClearsVisualHighlight(t *testing.T) {
+	root, rel := longFileFixture(t, 3)
+	m := openFileInFixture(t, root, rel)
+	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	mv := upd.(model)
+	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	mv = upd.(model)
+	if !strings.Contains(mv.fileViewer.viewport.View(), "\x1b[38;5;51m") {
+		t.Fatalf("setup: highlight should be present after `v` then `l`")
+	}
+	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mv = upd.(model)
+	if mv.fileViewer.visual.Active {
+		t.Fatalf("visual mode should be inactive after Esc")
+	}
+	if strings.Contains(mv.fileViewer.viewport.View(), "\x1b[38;5;51m") {
+		t.Errorf("expected cyan highlight cleared after Esc; got:\n%s",
+			mv.fileViewer.viewport.View())
+	}
+}
+
+// TestFileView_LMovesVisualHighlight: after entering visual mode,
+// pressing `l` extends the inline selection by one rune. The
+// viewport's cached content must reflect the new CharC — the
+// cyan range must grow.
+func TestFileView_LMovesVisualHighlight(t *testing.T) {
+	root, rel := longFileFixture(t, 3)
+	m := openFileInFixture(t, root, rel)
+	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	mv := upd.(model)
+	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	mv = upd.(model)
+	if mv.fileViewer.visual.CharC == 0 {
+		t.Fatalf("setup: `l` should have advanced CharC from 0")
+	}
+	view := mv.fileViewer.viewport.View()
+	if !strings.Contains(view, "\x1b[38;5;51m") {
+		t.Errorf("expected cyan highlight after `l`; got:\n%s", view)
+	}
+}
+
+// TestFileView_NewCommentShowsYellowGutter: saving a file-kind
+// comment must refresh the viewport cache so the new yellow ▍
+// gutter appears on the commented line. Before the fix, the
+// gutter only appeared after the next cursor move triggered
+// refreshFileView().
+func TestFileView_NewCommentShowsYellowGutter(t *testing.T) {
+	m := attachFileFixture(t)
+	visible := m.visibleFileEntries()
+	for i, e := range visible {
+		if e.Path == "src/main.go" {
+			m.fileCursor = i
+			break
+		}
+	}
+	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um := upd.(model)
+	if um.state != stateFileView {
+		t.Fatalf("setup: expected stateFileView; got %v", um.state)
+	}
+	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	um = upd.(model)
+	if um.state != stateCommentComposer {
+		t.Fatalf("setup: expected composer; got %v", um.state)
+	}
+	um.commentTa.SetValue("rename alpha")
+	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	um = upd.(model)
+	if um.state != stateFileView {
+		t.Fatalf("after save: expected stateFileView; got %v", um.state)
+	}
+	view := um.fileViewer.viewport.View()
+	if !strings.Contains(view, "\x1b[38;5;228m") {
+		t.Errorf("expected yellow ▍ gutter in viewport after saving comment; got:\n%s", view)
+	}
+}
