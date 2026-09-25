@@ -19,7 +19,7 @@ import (
 	"github.com/twistedogic/pinky/internal/inject"
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
-	"charm.land/bubbles/v2/filepicker"
+	"github.com/twistedogic/pinky/internal/workspace"
 )
 
 const (
@@ -142,10 +142,13 @@ type model struct {
 	tab        tab
 	fileReturn state
 
-	// File review tab state. filePicker is the bubbles directory
-	// browser rooted at fileRoot; selecting a file moves the model
-	// into stateFileView.
-	filePicker filepicker.Model
+	// File review tab state. fileEntries is the flat workspace
+	// tree produced by workspace.Walk; fileCollapsed hides every
+	// descendant of the named directory; fileCursor indexes into
+	// the visible (non-collapsed) entries.
+	fileEntries   []workspace.Entry
+	fileCollapsed map[string]bool
+	fileCursor    int
 	fileRoot      string
 
 	// fileViewer is the state for stateFileView.
@@ -351,8 +354,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == stateFileView && m.fileViewer.path != "" {
 			m.refreshFileView()
 		}
-		// ponytail: let the bubbles filepicker size itself.
-		m.filePicker.SetHeight(msg.Height - 5)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -397,18 +398,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 		}
 		return m, pollCmd(m.src)
-	}
-
-	// ponytail: route any unhandled msg to the bubbles filepicker
-	// when we're on the file tab — its Init() emits a readDirMsg
-	// on entry, and Enter/Back emit follow-up reads. Anything the
-	// picker doesn't recognise is silently dropped.
-	if m.state == stateFileNav || m.state == stateFileView {
-		updated, cmd := m.filePicker.Update(msg)
-		m.filePicker = updated
-		if cmd != nil {
-			return m, cmd
-		}
 	}
 
 	var cmds []tea.Cmd
@@ -480,9 +469,8 @@ func (m *model) toggleTab() tea.Cmd {
 		// Remember the message sub-state so Tab back returns to it.
 		m.fileReturn = m.state
 		m.tab = tabFiles
-		if m.filePicker.CurrentDirectory == "" {
+		if len(m.fileEntries) == 0 {
 			m.enterFileNav()
-			return m.filePicker.Init()
 		}
 		m.state = stateFileNav
 		m.reflow()
@@ -500,8 +488,10 @@ func (m *model) toggleTab() tea.Cmd {
 	return nil
 }
 
-// enterFileNav runs the workspace walker against m.fileRoot and
-// transitions to stateFileNav.
+// enterFileNav walks m.fileRoot with workspace.Walk and transitions
+// to stateFileNav. The flat entry slice + collapse map is the
+// single source of truth for the dir navigator; visibleFileEntries
+// derives the visible rows on demand.
 func (m *model) enterFileNav() {
 	if m.fileRoot == "" {
 		m.state = stateNav
@@ -512,18 +502,90 @@ func (m *model) enterFileNav() {
 		m.refreshViewport()
 		return
 	}
-	// ponytail: use the bubbles filepicker rooted at fileRoot.
-	// It manages its own directory traversal, selection, and
-	// back/forward navigation. pinky only watches filepicker.Path
-	// to know when the user has chosen a file.
-	fp := filepicker.New()
-	fp.CurrentDirectory = m.fileRoot
-	fp.DirAllowed = true
-	fp.FileAllowed = true
-	fp.ShowHidden = false
-	m.filePicker = fp
+	entries, err := workspace.Walk(m.fileRoot)
+	if err != nil {
+		m.state = stateNav
+		m.latest = session.Message{
+			Role: session.RoleUser,
+			Text: "[workspace walk failed: " + err.Error() + "]",
+		}
+		m.refreshViewport()
+		return
+	}
+	m.fileEntries = entries
+	if m.fileCollapsed == nil {
+		m.fileCollapsed = map[string]bool{}
+	}
+	// Top-level dirs start expanded so the user sees workspace
+	// contents without an extra keypress. Deeper dirs start
+	// collapsed to keep the visible list short.
+	for _, e := range entries {
+		if e.IsDir && e.Depth == 1 {
+			delete(m.fileCollapsed, e.Path)
+		}
+	}
+	m.fileCursor = 0
 	m.state = stateFileNav
 	m.reflow()
+}
+
+// visibleFileEntries returns the entries that should appear in
+// the dir navigator after applying m.fileCollapsed. A collapsed
+// dir hides itself and every descendant with Depth > dir.Depth
+// whose Path starts with dir.Path + "/".
+func (m model) visibleFileEntries() []workspace.Entry {
+	if len(m.fileEntries) == 0 {
+		return nil
+	}
+	hidden := map[int]bool{}
+	for i, e := range m.fileEntries {
+		if !e.IsDir {
+			continue
+		}
+		if m.fileCollapsed[e.Path] {
+			for j := i + 1; j < len(m.fileEntries); j++ {
+				if m.fileEntries[j].Depth <= e.Depth {
+					break
+				}
+				hidden[j] = true
+			}
+		}
+	}
+	out := make([]workspace.Entry, 0, len(m.fileEntries)-len(hidden))
+	for i, e := range m.fileEntries {
+		if !hidden[i] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// moveFileCursor clamps fileCursor into [0, len(visible)-1] after
+// applying delta. Called from j/k handlers in handleFileNavKey.
+func (m *model) moveFileCursor(delta int) {
+	visible := m.visibleFileEntries()
+	n := len(visible)
+	if n == 0 {
+		m.fileCursor = 0
+		return
+	}
+	m.fileCursor += delta
+	if m.fileCursor < 0 {
+		m.fileCursor = 0
+	}
+	if m.fileCursor >= n {
+		m.fileCursor = n - 1
+	}
+}
+
+// findFileIndex returns the index of path in m.fileEntries, or -1.
+func (m *model) findFileIndex(path string) int {
+	for i, e := range m.fileEntries {
+		if e.Path == path {
+			return i
+		}
+	}
+	return -1
 }
 
 // enterCompose transitions to compose mode with the textarea reset
@@ -855,57 +917,140 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, vpCmd
 }
 
-// handleFileNavKey delegates to the bubbles filepicker for
-// directory traversal and selection, then opens the file viewer
-// when the picker reports a chosen file via filepicker.Path. The
-// pinky-level keys (c, s, q, Tab/Esc) are handled here.
+// handleFileNavKey drives the dir navigator: j/k move the cursor
+// through visible entries, h collapses (or jumps to parent), l
+// expands (or jumps to first child), Enter opens a file or
+// toggles a dir, c opens the comment composer for the current
+// file. s flushes accumulated comments, q/Tab/Esc leave the tab.
 func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// pinky-level keys first.
-	if key.Matches(msg, defaultKeyMap.FileNavComment) || (isKeyRune(msg, 'c')) {
-		path := m.filePicker.Path
-		if path == "" {
+	visible := m.visibleFileEntries()
+	if isEsc(msg) || key.Matches(msg, defaultKeyMap.FileNavBack) {
+		return m, m.toggleTab()
+	}
+	switch {
+	case isKeyRune(msg, 'q'):
+		return m, tea.Quit
+	case isKeyRune(msg, 's'):
+		m.handleSend()
+		return m, nil
+	case isKeyRune(msg, 'j'):
+		m.moveFileCursor(+1)
+		return m, nil
+	case isKeyRune(msg, 'k'):
+		m.moveFileCursor(-1)
+		return m, nil
+	case isKeyRune(msg, 'h'):
+		m.fileNavCollapseOrParent()
+		return m, nil
+	case isKeyRune(msg, 'l'):
+		m.fileNavExpandOrChild()
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.FileNavComment) || isKeyRune(msg, 'c'):
+		// Whole-file comment, file-only. No-op on directories.
+		if m.fileCursor < 0 || m.fileCursor >= len(visible) {
 			return m, nil
 		}
-		rel, err := filepath.Rel(m.fileRoot, path)
-		if err != nil {
-			rel = path
+		entry := visible[m.fileCursor]
+		if entry.IsDir {
+			return m, nil
 		}
 		m.commentAnchor = commentAnchor{
 			kind:      render.CommentFile,
-			filePath:  rel,
+			filePath:  entry.Path,
 			lineStart: 1,
-			lineEnd:   m.fileLineCount(rel),
+			lineEnd:   m.fileLineCount(entry.Path),
 		}
 		m.enterCommentComposer(m.commentAnchor)
 		return m, nil
 	}
-	if key.Matches(msg, defaultKeyMap.FileNavBack) || isEsc(msg) {
-		return m, m.toggleTab()
-	}
-	if key.Matches(msg, defaultKeyMap.NavSend) || (isKeyRune(msg, 's')) {
-		m.handleSend()
+	if msg.(tea.KeyPressMsg).Code == tea.KeyEnter {
+		if m.fileCursor < 0 || m.fileCursor >= len(visible) {
+			return m, nil
+		}
+		entry := visible[m.fileCursor]
+		if entry.IsDir {
+			m.fileCollapsed[entry.Path] = !m.fileCollapsed[entry.Path]
+			return m, nil
+		}
+		m.openFileViewer(entry.Path)
 		return m, nil
 	}
-	if key.Matches(msg, defaultKeyMap.NavQuit) || (isKeyRune(msg, 'q')) {
-		return m, tea.Quit
-	}
+	return m, nil
+}
 
-	// Delegate to the filepicker. If it set Path, open the viewer.
-	prev := m.filePicker.Path
-	updated, cmd := m.filePicker.Update(msg)
-	m.filePicker = updated
-	if m.filePicker.Path != "" && m.filePicker.Path != prev {
-		rel, err := filepath.Rel(m.fileRoot, m.filePicker.Path)
-		if err != nil {
-			rel = m.filePicker.Path
-		}
-		m.openFileViewer(rel)
-		// Clear the picker's selection so the next time the user
-		// re-enters stateFileNav the picker doesn't immediately
-		// re-open the same file.
-		m.filePicker.Path = ""
+// fileNavCollapseOrParent implements `h`: collapse the cursor's
+// directory if expanded, otherwise jump the cursor to its parent
+// entry. No-op when the cursor is on the root.
+func (m *model) fileNavCollapseOrParent() {
+	visible := m.visibleFileEntries()
+	if m.fileCursor < 0 || m.fileCursor >= len(visible) {
+		return
 	}
-	return m, cmd
+	entry := visible[m.fileCursor]
+	if entry.IsDir && !m.fileCollapsed[entry.Path] {
+		m.fileCollapsed[entry.Path] = true
+		return
+	}
+	// Jump to parent: the closest ancestor with a strictly lower
+	// depth whose path is a prefix of entry.Path.
+	parentDepth := entry.Depth - 1
+	for parentDepth >= 0 {
+		for i, e := range m.fileEntries {
+			if e.IsDir && e.Depth == parentDepth && (parentDepth == 0 ||
+				filepath.HasPrefix(entry.Path, e.Path+"/")) {
+				// Find this entry's position in visible.
+				for vi, ve := range visible {
+					if ve.Path == e.Path {
+						m.fileCursor = vi
+						return
+					}
+				}
+				_ = i
+				break
+			}
+		}
+		parentDepth--
+	}
+}
+
+// fileNavExpandOrChild implements `l`: expand the cursor's
+// directory if collapsed, otherwise jump to the first visible
+// child entry. No-op on files.
+func (m *model) fileNavExpandOrChild() {
+	visible := m.visibleFileEntries()
+	if m.fileCursor < 0 || m.fileCursor >= len(visible) {
+		return
+	}
+	entry := visible[m.fileCursor]
+	if !entry.IsDir {
+		return
+	}
+	if m.fileCollapsed[entry.Path] {
+		delete(m.fileCollapsed, entry.Path)
+		return
+	}
+	// Jump to first visible child: the next entry in the flat
+	// list whose depth is entry.Depth + 1 and whose path is a
+	// child of entry.Path. If there's no such entry (empty dir
+	// or all children hidden), collapse the dir so the user gets
+	// immediate feedback.
+	idx := m.findFileIndex(entry.Path)
+	if idx < 0 {
+		return
+	}
+	for j := idx + 1; j < len(m.fileEntries); j++ {
+		c := m.fileEntries[j]
+		if c.Depth <= entry.Depth {
+			break
+		}
+		if c.Depth == entry.Depth+1 {
+			m.fileCollapsed[entry.Path] = true
+			return
+		}
+	}
+	// No visible child: collapse the dir so the user sees the
+	// action took effect.
+	m.fileCollapsed[entry.Path] = true
 }
 
 // fileLineCount returns the number of source lines in path, or 1
@@ -1598,11 +1743,49 @@ func (m model) errorView() string {
 		bodyStyle.Render(m.err.Error())
 }
 
-// fileNavView renders the workspace header followed by the
-// bubbles filepicker view (current directory listing).
+// fileNavView renders the workspace header followed by the tree
+// of visible entries. Each line carries a 2-space indent per
+// depth level, a collapse marker (▾ expanded, ▸ collapsed) for
+// directories, and a cyan ▍ on the cursor's row.
 func (m model) fileNavView() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	return headerStyle.Render(fmt.Sprintf("workspace — %s", m.filePicker.CurrentDirectory)) + "\n" + m.filePicker.View()
+	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+	visible := m.visibleFileEntries()
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(fmt.Sprintf("workspace — %s", m.fileRoot)))
+	b.WriteByte('\n')
+	if len(visible) == 0 {
+		b.WriteString(dimStyle.Render("  (empty)"))
+		return b.String()
+	}
+	for i, e := range visible {
+		indent := strings.Repeat("  ", e.Depth)
+		marker := " "
+		if e.IsDir {
+			if m.fileCollapsed[e.Path] {
+				marker = "▸"
+			} else {
+				marker = "▾"
+			}
+		}
+		name := filepath.Base(e.Path)
+		if e.Path == "." {
+			name = "."
+			indent = ""
+			marker = "▾"
+		}
+		line := fmt.Sprintf("%s%s %s", indent, marker, name)
+		if i == m.fileCursor {
+			b.WriteString(selectedStyle.Render("▶ " + line))
+		} else {
+			b.WriteString(normalStyle.Render("  " + line))
+		}
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderFileContent builds the per-line rendered string for the

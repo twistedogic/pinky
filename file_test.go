@@ -12,6 +12,7 @@ import (
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
+	"github.com/twistedogic/pinky/internal/workspace"
 )
 
 // fileFixtureTree returns a temp workspace root containing a small
@@ -30,16 +31,15 @@ func fileFixtureTree(t *testing.T) (string, string, int) {
 		}
 	}
 	write("src/main.go", "alpha\nbeta\ngamma\n")
+	write("src/pkg/a.go", "x\n")
 	write("README.md", "hi\n")
 	// line count = 3 for main.go
 	return root, "src/main.go", 3
 }
 
 // attachFileFixture wires a model to the fixture tree (no real
-// tmux, no polling) with the bubbles filepicker rooted at the
-// fixture directory. The fixture's picker is "ready" once the
-// readDir Cmd has fired and the entries have populated; we pump
-// the picker to settle.
+// tmux, no polling) and seeds the dir navigator's flat tree via
+// workspace.Walk. Everything is synchronous; no Cmd pump needed.
 func attachFileFixture(t *testing.T) *model {
 	t.Helper()
 	root, _, _ := fileFixtureTree(t)
@@ -47,100 +47,38 @@ func attachFileFixture(t *testing.T) *model {
 	m.fileRoot = root
 	m.enterFileNav()
 	m.tab = tabFiles
-	pumpPicker(t, &m)
+	if m.state != stateFileNav {
+		t.Fatalf("enterFileNav should land in stateFileNav; got %v", m.state)
+	}
 	return &m
 }
 
-// pumpPicker drives the picker until it has loaded its entries
-// (or times out). Calls the picker's Init() to get the initial
-// readDir Cmd, then feeds the resulting Msg back into the model.
-// Also fires a WindowSizeMsg so the picker renders more than the
-// first entry.
-func pumpPicker(t *testing.T, m *model) {
-	t.Helper()
-	m.width = 80
-	m.height = 24
-	m.reflow()
-	upd, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	*m = upd.(model)
-	cmd = m.filePicker.Init()
-	for i := 0; i < 10; i++ {
-		if cmd == nil {
-			return
-		}
-		msg := cmd()
-		if msg == nil {
-			return
-		}
-		upd, next := m.Update(msg)
-		*m = upd.(model)
-		cmd = next
-	}
-	if !strings.Contains(m.filePicker.View(), "README.md") {
-		t.Logf("picker view: %q", m.filePicker.View())
-	}
-}
-
-// pickIndex uses j/k to move the picker's cursor to the given
-// absolute index from its current position. The picker's
-// selection index is unexported; we trust the fixture layout
-// (alphabetical, dirs first).
-func pickIndex(t *testing.T, m *model, idx int) {
-	t.Helper()
-	// We can't read the current cursor position from the picker,
-	// so just press j until we overshoot, then k back. For tests
-	// with known fixture sizes this is reliable.
-	// Caller is responsible for picking a sane target.
-	for n := 0; n < idx; n++ {
-		upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
-		*m = upd.(model)
-	}
-}
-
-// openFile navigates the picker into the file's directory and
-// selects it, transitioning the model into stateFileView.
-// Fixture layout: dirs first (alphabetical), then files. `src` is
-// at top-level index 0; `src/main.go` is at index 0 inside `src`.
+// openFile moves the cursor to rel in the visible tree and presses
+// Enter, transitioning the model into stateFileView. Fails the
+// test if rel isn't visible (collapsed or missing).
 func openFile(t *testing.T, m *model, rel string) {
 	t.Helper()
-	parts := strings.Split(rel, "/")
-	if len(parts) == 1 {
-		// Top-level file. In the fixture only `README.md` is a
-		// top-level file; with one dir first, it lives at index 1.
-		// `l` on a file is a no-op in the picker; only `enter`
-		// sets Path. Use `enter`.
-		pickIndex(t, m, 1)
-		upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		*m = upd.(model)
-		if m.state != stateFileView {
-			t.Fatalf("expected stateFileView after selecting %q; got %v", rel, m.state)
-		}
-		return
-	}
-	// Walk into each intermediate directory.
-	for i := 0; i < len(parts)-1; i++ {
-		// Top-level dirs are at indices 0..N-1 (alphabetical).
-		// Single dir in fixture: `src` at index 0.
-		pickIndex(t, m, i)
-		upd, cmd := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
-		*m = upd.(model)
-		if cmd != nil {
-			msg := cmd()
-			if msg != nil {
-				upd, _ = m.Update(msg)
-				*m = upd.(model)
+	visible := m.visibleFileEntries()
+	for i, e := range visible {
+		if e.Path == rel {
+			m.fileCursor = i
+			upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			*m = upd.(model)
+			if m.state != stateFileView {
+				t.Fatalf("expected stateFileView after opening %q; got %v", rel, m.state)
 			}
+			return
 		}
-		// After entering a dir the picker resets cursor to 0.
 	}
-	// The file is at index 0 inside its directory. `l` enters
-	// directories but does NOT select files — only `enter` does.
-	pickIndex(t, m, 0)
-	upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	*m = upd.(model)
-	if m.state != stateFileView {
-		t.Fatalf("expected stateFileView after selecting %q; got %v", rel, m.state)
+	t.Fatalf("%q not in visible tree (have %v)", rel, visiblePathList(visible))
+}
+
+func visiblePathList(es []workspace.Entry) []string {
+	out := make([]string, len(es))
+	for i, e := range es {
+		out[i] = e.Path
 	}
+	return out
 }
 
 // TestTab_TogglesBetweenMessageAndFiles: Tab from stateNav enters
@@ -173,8 +111,98 @@ func TestTab_TogglesBetweenMessageAndFiles(t *testing.T) {
 	}
 }
 
-// TestFileNav_OpenFileOpensViewer: pressing `l` on a file in the
-// picker transitions to stateFileView with the relative path set.
+// TestFileNav_ShowsAllEntriesUnderRoot: the tree contains every
+// entry under fileRoot (no need to navigate into subdirs to see
+// nested files). README.md, src, src/main.go, src/pkg, src/pkg/a.go
+// must all appear in the flat list.
+func TestFileNav_ShowsAllEntriesUnderRoot(t *testing.T) {
+	m := attachFileFixture(t)
+	got := visiblePathList(m.visibleFileEntries())
+	for _, want := range []string{"README.md", "src", "src/main.go", "src/pkg", "src/pkg/a.go"} {
+		var found bool
+		for _, p := range got {
+			if p == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q in visible tree; got %v", want, got)
+		}
+	}
+}
+
+// TestFileNav_HLCollapseExpand: pressing `l` on `src` collapses
+// it (hides src/main.go and src/pkg); pressing `l` again expands
+// it back. Pressing `h` on a collapsed dir jumps to the parent.
+func TestFileNav_HLCollapseExpand(t *testing.T) {
+	m := attachFileFixture(t)
+
+	// Move cursor to `src`. By default top-level dirs are
+	// expanded, so src's children are visible.
+	visible := m.visibleFileEntries()
+	srcIdx := -1
+	for i, e := range visible {
+		if e.Path == "src" {
+			srcIdx = i
+			break
+		}
+	}
+	if srcIdx < 0 {
+		t.Fatalf("setup: `src` not in visible tree")
+	}
+	m.fileCursor = srcIdx
+
+	// `l` on an expanded dir: collapses it (no visible child
+	// because we already moved to a sibling, not a child).
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	um := upd.(model)
+	if !um.fileCollapsed["src"] {
+		t.Errorf("`l` on expanded `src` should collapse it; fileCollapsed=%v", um.fileCollapsed)
+	}
+	for _, p := range visiblePathList(um.visibleFileEntries()) {
+		if p == "src/main.go" || p == "src/pkg" || p == "src/pkg/a.go" {
+			t.Errorf("after collapse: %q should be hidden; got %v", p, visiblePathList(um.visibleFileEntries()))
+		}
+	}
+
+	// `l` again on collapsed dir: expands it.
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	um = upd.(model)
+	if um.fileCollapsed["src"] {
+		t.Errorf("`l` on collapsed `src` should expand it; fileCollapsed=%v", um.fileCollapsed)
+	}
+	gotPaths := visiblePathList(um.visibleFileEntries())
+	var hasMain bool
+	for _, p := range gotPaths {
+		if p == "src/main.go" {
+			hasMain = true
+			break
+		}
+	}
+	if !hasMain {
+		t.Errorf("after expand: src/main.go should be visible; got %v", gotPaths)
+	}
+
+	// Move cursor to `src/main.go`, press `h`: jumps cursor to
+	// the parent dir `src` (not collapse, since cursor is on a
+	// file with an expanded parent).
+	for i, e := range um.visibleFileEntries() {
+		if e.Path == "src/main.go" {
+			um.fileCursor = i
+			break
+		}
+	}
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	um = upd.(model)
+	parent := um.visibleFileEntries()[um.fileCursor]
+	if parent.Path != "src" {
+		t.Errorf("`h` on src/main.go should jump cursor to parent `src`; got %q", parent.Path)
+	}
+}
+
+// TestFileNav_OpenFileOpensViewer: pressing Enter on src/main.go
+// in the tree transitions to stateFileView with the path set.
 func TestFileNav_OpenFileOpensViewer(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
@@ -353,6 +381,32 @@ func TestFileView_EscReturnsToDirNav(t *testing.T) {
 	}
 }
 
+// TestFileNav_COnDirectoryIsNoop: pressing `c` on a directory in
+// stateFileNav must not open the comment composer.
+func TestFileNav_COnDirectoryIsNoop(t *testing.T) {
+	m := attachFileFixture(t)
+	visible := m.visibleFileEntries()
+	srcIdx := -1
+	for i, e := range visible {
+		if e.Path == "src" {
+			srcIdx = i
+			break
+		}
+	}
+	if srcIdx < 0 {
+		t.Fatalf("setup: `src` not visible")
+	}
+	m.fileCursor = srcIdx
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	um := upd.(model)
+	if um.state != stateFileNav {
+		t.Errorf("`c` on dir should be no-op; got state=%v", um.state)
+	}
+	if len(um.comments) != 0 {
+		t.Errorf("`c` on dir should not stage a comment; got %d", len(um.comments))
+	}
+}
+
 // longFileFixture writes a fixture file with N lines into the
 // temp workspace and returns its relative path. Used by the
 // viewport scroll tests below.
@@ -370,15 +424,14 @@ func longFileFixture(t *testing.T, n int) (root, rel string) {
 	return root, rel
 }
 
-// openFileInFixture wires the fixture into the model with the
-// filepicker and loads the requested file into stateFileView.
+// openFileInFixture wires the fixture into the model and loads
+// the requested file into stateFileView.
 func openFileInFixture(t *testing.T, root, rel string) *model {
 	t.Helper()
 	m := newIdleModelForKeymap(t)
 	m.fileRoot = root
 	m.enterFileNav()
 	m.tab = tabFiles
-	pumpPicker(t, &m)
 	openFile(t, &m, rel)
 	return &m
 }
@@ -553,27 +606,5 @@ func TestFileView_NewCommentShowsYellowGutter(t *testing.T) {
 	view := um.fileViewer.viewport.View()
 	if !strings.Contains(view, "\x1b[38;5;228m") {
 		t.Errorf("expected yellow ▍ gutter in viewport after saving comment; got:\n%s", view)
-	}
-}
-
-// TestFileNav_ShowsTopLevel: enterFileNav seeds the bubbles
-// filepicker at fileRoot. Picker.View() renders the top-level
-// entries (no recursive tree view).
-func TestFileNav_ShowsTopLevel(t *testing.T) {
-	root, _, _ := fileFixtureTree(t)
-	m := newIdleModelForKeymap(t)
-	m.fileRoot = root
-	m.enterFileNav()
-	pumpPicker(t, &m)
-
-	if m.filePicker.CurrentDirectory != root {
-		t.Errorf("picker should be at fileRoot; got %q", m.filePicker.CurrentDirectory)
-	}
-	view := m.filePicker.View()
-	if !strings.Contains(view, "src") {
-		t.Errorf("expected `src` in picker view; got:\n%s", view)
-	}
-	if !strings.Contains(view, "README.md") {
-		t.Errorf("expected `README.md` in picker view; got:\n%s", view)
 	}
 }
