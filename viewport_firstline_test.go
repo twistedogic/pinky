@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/twistedogic/pinky/internal/session"
@@ -31,8 +31,8 @@ func TestCommitFirstLineVisible(t *testing.T) {
 	if mv.latest.Text == "" {
 		t.Fatal("after poll: latest.Text should be set")
 	}
-	if mv.viewport.YOffset != 0 {
-		t.Errorf("YOffset should be 0 on commit; got %d", mv.viewport.YOffset)
+	if mv.viewport.YOffset() != 0 {
+		t.Errorf("YOffset should be 0 on commit; got %d", mv.viewport.YOffset())
 	}
 
 	view := mv.viewport.View()
@@ -76,8 +76,8 @@ func TestCommitFirstLineVisible_AfterReflow(t *testing.T) {
 		t.Errorf("first visible line should contain 'first sentence'; got %q\n--- full view ---\n%s",
 			firstRendered, view)
 	}
-	if mv.viewport.YOffset != 0 {
-		t.Errorf("YOffset should be 0; got %d", mv.viewport.YOffset)
+	if mv.viewport.YOffset() != 0 {
+		t.Errorf("YOffset should be 0; got %d", mv.viewport.YOffset())
 	}
 }
 
@@ -85,15 +85,15 @@ func TestCommitFirstLineVisible_AfterReflow(t *testing.T) {
 // placeholder, transitions to real content. YOffset should land
 // at 0 and the first sentence should be visible.
 func TestCommitFirstLineVisible_FromPlaceholder(t *testing.T) {
-	vp := viewport.New(80, 22)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(22))
 	vp.SetContent("waiting for agent…")
-	if vp.YOffset != 0 {
-		t.Fatalf("setup: placeholder YOffset should be 0; got %d", vp.YOffset)
+	if vp.YOffset() != 0 {
+		t.Fatalf("setup: placeholder YOffset should be 0; got %d", vp.YOffset())
 	}
 
 	vp.SetContent("The first sentence is here.\n\nSecond sentence.")
-	if vp.YOffset != 0 {
-		t.Errorf("after SetContent: YOffset should be 0; got %d", vp.YOffset)
+	if vp.YOffset() != 0 {
+		t.Errorf("after SetContent: YOffset should be 0; got %d", vp.YOffset())
 	}
 	view := vp.View()
 	firstRendered := strings.SplitN(view, "\n", 2)[0]
@@ -135,8 +135,8 @@ func TestCommitFirstLineVisible_LongMessage(t *testing.T) {
 	upd, _ = mv.Update(sessionMsg{entries: src.messages})
 	mv = upd.(model)
 
-	if mv.viewport.YOffset != 0 {
-		t.Errorf("YOffset should be 0; got %d", mv.viewport.YOffset)
+	if mv.viewport.YOffset() != 0 {
+		t.Errorf("YOffset should be 0; got %d", mv.viewport.YOffset())
 	}
 	view := mv.viewport.View()
 	firstRendered := strings.SplitN(view, "\n", 2)[0]
@@ -197,13 +197,13 @@ func TestCommitFirstLineVisible_AfterScroll(t *testing.T) {
 	upd, _ = mv.Update(sessionMsg{entries: src.messages})
 	mv = upd.(model)
 
-	maxOff := mv.viewport.TotalLineCount() - mv.viewport.Height
+	maxOff := mv.viewport.TotalLineCount() - mv.viewport.Height()
 	if maxOff < 3 {
 		t.Fatalf("test fixture too short; maxOff=%d", maxOff)
 	}
 	mv.viewport.SetYOffset(maxOff - 2)
-	if mv.viewport.YOffset <= 0 {
-		t.Fatalf("setup: should be scrolled; YOffset=%d", mv.viewport.YOffset)
+	if mv.viewport.YOffset() <= 0 {
+		t.Fatalf("setup: should be scrolled; YOffset=%d", mv.viewport.YOffset())
 	}
 
 	secondText := "Brand new message: first sentence.\n\n" +
@@ -217,8 +217,8 @@ func TestCommitFirstLineVisible_AfterScroll(t *testing.T) {
 	}})
 	mv = upd.(model)
 
-	if mv.viewport.YOffset != 0 {
-		t.Errorf("after second commit: YOffset should be 0; got %d", mv.viewport.YOffset)
+	if mv.viewport.YOffset() != 0 {
+		t.Errorf("after second commit: YOffset should be 0; got %d", mv.viewport.YOffset())
 	}
 	view := mv.viewport.View()
 	firstRendered := strings.SplitN(view, "\n", 2)[0]

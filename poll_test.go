@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"charm.land/bubbles/v2/viewport"
 
 	"github.com/twistedogic/pinky/internal/session"
 )
@@ -28,7 +28,7 @@ func newPollModel(src *pollableSource) *model {
 	m := newModel()
 	m.src = src
 	m.state = stateNav
-	m.viewport = viewport.New(80, 20)
+	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	m.width = 80
 	m.height = 24
 	m.refreshViewport()

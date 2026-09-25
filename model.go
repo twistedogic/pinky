@@ -8,18 +8,18 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/twistedogic/pinky/internal/history"
 	"github.com/twistedogic/pinky/internal/inject"
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
-	"github.com/charmbracelet/bubbles/filepicker"
+	"charm.land/bubbles/v2/filepicker"
 )
 
 const (
@@ -187,8 +187,8 @@ func (m *model) cursorOnScreen() bool {
 	// Compare in source-line space: both the cursor's source line
 	// and the viewport's source line (translating YOffset back via
 	// the wrapped-line map).
-	wrapTop := m.viewport.YOffset
-	wrapBot := wrapTop + m.viewport.Height
+	wrapTop := m.viewport.YOffset()
+	wrapBot := wrapTop + m.viewport.Height()
 	srcTop := m.wrappedYOffsetToSource(wrapTop)
 	srcBot := m.wrappedYOffsetToSource(wrapBot - 1)
 	return srcLine >= srcTop && srcLine <= srcBot
@@ -210,12 +210,12 @@ func (m *model) scrollCursorIntoView() {
 	// Translate the target source line into wrapped-YOffset space
 	// so the viewport actually lands on that markdown line.
 	target := m.sourceYOffset(srcLine)
-	off := max(target-m.viewport.Height+1, 0)
+	off := max(target-m.viewport.Height()+1, 0)
 	m.viewport.SetYOffset(off)
 }
 
 func newModel() model {
-	vp := viewport.New(40, 20)
+	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
 	return model{
 		state:    statePicking,
 		viewport: vp,
@@ -271,7 +271,7 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	m.pane = pane
 	m.src = src
 	m.hist = hist
-	m.viewport = viewport.New(w, h)
+	m.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(h))
 	m.textarea = ta
 	m.commentTa = cta
 	m.state = stateNav
@@ -347,7 +347,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.help.Width = msg.Width
+		m.help.SetWidth(msg.Width)
 		m.reflow()
 		m.refreshViewport()
 		// reflow already re-anchors the file cursor; refresh the
@@ -432,7 +432,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Ctrl+C is global across every state; `?` toggles between the
 	// short help footer and the expanded (multi-column) help.
-	if msg.Type == tea.KeyCtrlC {
+	if false {
 		return m, tea.Quit
 	}
 	if key.Matches(msg, defaultKeyMap.Help) {
@@ -542,6 +542,42 @@ func (m *model) enterFileNav() {
 // t.Cleanup.
 var sendToPane = inject.Send
 
+// singleRune returns the rune of msg if it's a single printable
+// key press with no modifier keys (the v2 replacement for the v1
+// `msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == X`
+// pattern).
+func singleRune(msg tea.KeyMsg) (rune, bool) {
+	kp, ok := msg.(tea.KeyPressMsg)
+	if !ok || kp.Mod != 0 || kp.Code == 0 {
+		return 0, false
+	}
+	if kp.Code < 32 || kp.Code == 127 { // control chars / del are not "single rune"
+		return 0, false
+	}
+	return kp.Code, true
+}
+
+// isEsc reports whether msg is a plain Esc press (no modifiers).
+func isEsc(msg tea.KeyMsg) bool {
+	kp, ok := msg.(tea.KeyPressMsg)
+	return ok && kp.Code == tea.KeyEsc && kp.Mod == 0
+}
+
+// isKeyRune reports whether msg is a plain key press of the given rune
+// (no modifier keys). Replaces v1's
+// `msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == r`.
+func isKeyRune(msg tea.KeyMsg, r rune) bool {
+	kp, ok := msg.(tea.KeyPressMsg)
+	return ok && kp.Mod == 0 && kp.Code == r
+}
+
+// keyMsg extracts a Key struct from a KeyMsg for direct field access
+// (Code, Mod, Text). Returns ok=false for non-press / release msgs.
+func keyMsg(msg tea.KeyMsg) (tea.Key, bool) {
+	kp, ok := msg.(tea.KeyPressMsg)
+	return tea.Key(kp), ok
+}
+
 // dispatch sends text to the agent pane, recording to history on
 // success and surfacing a "[send failed: ...]" placeholder in the
 // main view on failure. Returns true on success.
@@ -598,13 +634,23 @@ func (m *model) enterCommentComposer(a commentAnchor) {
 // Enter saves the new comment and returns to nav without sending; the
 // accumulated batch flushes only via `s` in stateNav. Esc cancels.
 func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+	kp, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		var taCmd tea.Cmd
+		m.commentTa, taCmd = m.commentTa.Update(msg)
+		return m, taCmd
+	}
+	switch kp.Code {
 	case tea.KeyEsc:
-		m.cancelCommentComposer()
-		return m, nil
+		if kp.Mod == 0 {
+			m.cancelCommentComposer()
+			return m, nil
+		}
 	case tea.KeyEnter:
-		m.saveComment()
-		return m, nil
+		if kp.Mod == 0 {
+			m.saveComment()
+			return m, nil
+		}
 	}
 	var taCmd tea.Cmd
 	m.commentTa, taCmd = m.commentTa.Update(msg)
@@ -781,7 +827,7 @@ func (m *model) moveCursor(delta int) {
 func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc is a special key but is part of the nav surface (visual
 	// exit). Route it through the SM so single source of truth.
-	if msg.Type == tea.KeyEsc {
+	if isEsc(msg) {
 		action := render.NavHandle(0x1b, &m.nav, &m.cursor, &m.selection, m.blocks)
 		if action == render.ActionExitVisual {
 			m.refreshViewport()
@@ -790,8 +836,8 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// Single-rune keys go through the nav state machine. Special
 	// keys (arrows, PageUp/Down, Home/End) forward to the viewport.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		action := render.NavHandle(msg.Runes[0], &m.nav, &m.cursor, &m.selection, m.blocks)
+	if r, ok := singleRune(msg); ok {
+		action := render.NavHandle(r, &m.nav, &m.cursor, &m.selection, m.blocks)
 		switch action {
 		case render.ActionNone:
 			// unrecognised rune — forward to viewport (so keys like '/'
@@ -829,7 +875,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // pinky-level keys (c, s, q, Tab/Esc) are handled here.
 func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// pinky-level keys first.
-	if key.Matches(msg, defaultKeyMap.FileNavComment) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'c') {
+	if key.Matches(msg, defaultKeyMap.FileNavComment) || (isKeyRune(msg, 'c')) {
 		path := m.filePicker.Path
 		if path == "" {
 			return m, nil
@@ -847,14 +893,14 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.enterCommentComposer(m.commentAnchor)
 		return m, nil
 	}
-	if key.Matches(msg, defaultKeyMap.FileNavBack) || msg.Type == tea.KeyEsc {
+	if key.Matches(msg, defaultKeyMap.FileNavBack) || isEsc(msg) {
 		return m, m.toggleTab()
 	}
-	if key.Matches(msg, defaultKeyMap.NavSend) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's') {
+	if key.Matches(msg, defaultKeyMap.NavSend) || (isKeyRune(msg, 's')) {
 		m.handleSend()
 		return m, nil
 	}
-	if key.Matches(msg, defaultKeyMap.NavQuit) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q') {
+	if key.Matches(msg, defaultKeyMap.NavQuit) || (isKeyRune(msg, 'q')) {
 		return m, tea.Quit
 	}
 
@@ -918,7 +964,7 @@ func (m *model) openFileViewer(path string) {
 		cursor:    1,
 		visual:    fileSelection{LineA: 1, CharA: 0, LineC: 1, CharC: 0},
 		lineIndex: idx,
-		viewport:  viewport.New(w, h),
+		viewport:  viewport.New(viewport.WithWidth(w), viewport.WithHeight(h)),
 	}
 	m.state = stateFileView
 	m.reflow()
@@ -943,7 +989,7 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc is handled before rune routing so visual-mode exit feels
 	// like the message viewer's.
-	if msg.Type == tea.KeyEsc {
+	if isEsc(msg) {
 		if m.fileViewer.visual.Active {
 			m.fileViewer.visual.Active = false
 			m.refreshFileView()
@@ -954,19 +1000,19 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if key.Matches(msg, defaultKeyMap.FileNavBack) && msg.Type != tea.KeyEsc {
+	if key.Matches(msg, defaultKeyMap.FileNavBack) && !isEsc(msg) {
 		m.state = stateFileNav
 		m.reflow()
 		return m, nil
 	}
 
 	switch {
-	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
+	case isKeyRune(msg, 'q'):
 		return m, tea.Quit
-	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's':
+	case isKeyRune(msg, 's'):
 		m.handleSend()
 		return m, nil
-	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'v':
+	case isKeyRune(msg, 'v'):
 		m.fileViewer.visual.Active = !m.fileViewer.visual.Active
 		if m.fileViewer.visual.Active {
 			line := m.fileViewer.cursor
@@ -979,30 +1025,30 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'j' {
+	if isKeyRune(msg, 'j') {
 		m.fileViewMoveLine(+1)
 		return m, nil
 	}
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'k' {
+	if isKeyRune(msg, 'k') {
 		m.fileViewMoveLine(-1)
 		return m, nil
 	}
 
 	// h / l: rune-granular in visual mode, no-op outside.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'l' {
+	if isKeyRune(msg, 'l') {
 		if m.fileViewer.visual.Active {
 			m.fileViewMoveRune(+1)
 			return m, nil
 		}
 	}
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'h' {
+	if isKeyRune(msg, 'h') {
 		if m.fileViewer.visual.Active {
 			m.fileViewMoveRune(-1)
 			return m, nil
 		}
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'c' {
+	if isKeyRune(msg, 'c') {
 		m.openFileComment()
 		return m, nil
 	}
@@ -1011,17 +1057,26 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// cursor. Home/End aren't in the viewport's default keymap;
 	// handle them explicitly so the position-indicator and sticky-
 	// bottom reattach patterns stay intuitive.
-	switch msg.Type {
-	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
-		var vpCmd tea.Cmd
-		m.fileViewer.viewport, vpCmd = m.fileViewer.viewport.Update(msg)
-		return m, vpCmd
-	case tea.KeyHome:
-		m.fileViewer.viewport.GotoTop()
-		return m, nil
-	case tea.KeyEnd:
-		m.fileViewer.viewport.GotoBottom()
-		return m, nil
+	kp, ok := msg.(tea.KeyPressMsg)
+	if ok {
+		switch kp.Code {
+		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+			if kp.Mod == 0 {
+				var vpCmd tea.Cmd
+				m.fileViewer.viewport, vpCmd = m.fileViewer.viewport.Update(msg)
+				return m, vpCmd
+			}
+		case tea.KeyHome:
+			if kp.Mod == 0 {
+				m.fileViewer.viewport.GotoTop()
+				return m, nil
+			}
+		case tea.KeyEnd:
+			if kp.Mod == 0 {
+				m.fileViewer.viewport.GotoBottom()
+				return m, nil
+			}
+		}
 	}
 	return m, nil
 }
@@ -1066,15 +1121,15 @@ func (m *model) scrollFileCursorIntoView() {
 		return
 	}
 	target := m.fileViewer.cursor - 1
-	top := m.fileViewer.viewport.YOffset
-	bot := top + m.fileViewer.viewport.Height - 1
+	top := m.fileViewer.viewport.YOffset()
+	bot := top + m.fileViewer.viewport.Height() - 1
 	if target >= top && target <= bot {
 		return
 	}
 	if target < top {
 		m.fileViewer.viewport.SetYOffset(target)
 	} else {
-		m.fileViewer.viewport.SetYOffset(target - m.fileViewer.viewport.Height + 1)
+		m.fileViewer.viewport.SetYOffset(target - m.fileViewer.viewport.Height() + 1)
 	}
 }
 
@@ -1202,7 +1257,7 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// `s` is the universal send — dispatch via NavHandle so the
 	// single-rune path is the source of truth (matches D3 / D4).
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's' {
+	if isKeyRune(msg, 's') {
 		m.handleSend()
 		return m, nil
 	}
@@ -1225,11 +1280,11 @@ func (m *model) reflow() {
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
-	m.viewport.Width = m.width
-	m.viewport.Height = vpHeight
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(vpHeight)
 	if m.fileViewer.path != "" {
-		m.fileViewer.viewport.Width = m.width
-		m.fileViewer.viewport.Height = vpHeight
+		m.fileViewer.viewport.SetWidth(m.width)
+		m.fileViewer.viewport.SetHeight(vpHeight)
 		// ponytail: every reflow that changes the file viewport
 		// size can leave the cursor's line off the new visible
 		// range — resize, help toggle (?), tab/state change all
@@ -1415,13 +1470,13 @@ func (m *model) refreshViewport() {
 	// by the viewport's ansi.Cut. Width - 1 leaves room for the
 	// single-cell gutter character.
 	var wrapWidth int
-	if w := m.viewport.Width; w > 1 {
+	if w := m.viewport.Width(); w > 1 {
 		wrapWidth = w - 1
 	}
 	m.blocks = blocks
 	focused := m.cursor.BlockIdx
 	if focused < 0 || focused >= len(m.blocks) {
-		focused = render.CurrentBlockIdx(blocks, m.wrappedYOffsetToSource(m.viewport.YOffset))
+		focused = render.CurrentBlockIdx(blocks, m.wrappedYOffsetToSource(m.viewport.YOffset()))
 	}
 	guttered, w2s := render.InjectGutterWrapped(rendered, m.blocks, focused, wrapWidth)
 	m.wrappedToSrc = w2s
@@ -1462,54 +1517,58 @@ func (m *model) sourceYOffset(src int) int {
 	return m.sourceToFirst[src]
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	// Help footer is rendered for every state; `?` flips it between
 	// the one-line short view and the multi-column full view.
 	helpView := m.help.View(m)
+	var content string
 	switch m.state {
 	case statePicking:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.pickerView(),
 			helpView,
 		))
 	case stateCompose:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.textarea.View(),
 			helpView,
 			m.statusLine(),
 		))
 	case stateCommentComposer:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.commentTa.View(),
 			helpView,
 			m.statusLine(),
 		))
 	case stateFileNav:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.fileNavView(),
 			helpView,
 			m.statusLine(),
 		))
 	case stateFileView:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.fileViewView(),
 			helpView,
 			m.statusLine(),
 		))
 	case stateError:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.errorView(),
 			helpView,
 		))
 	default:
-		return m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			helpView,
 			m.statusLine(),
 		))
 	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 // padRight appends spaces so s reaches exactly width visible cells.
@@ -1592,9 +1651,9 @@ func (m model) renderFileContent() string {
 func (m model) fileViewView() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	header := fmt.Sprintf("file — %s", m.fileViewer.path)
-	if len(m.fileViewer.lines) > m.fileViewer.viewport.Height {
-		top := m.fileViewer.viewport.YOffset + 1
-		bot := top + m.fileViewer.viewport.Height - 1
+	if len(m.fileViewer.lines) > m.fileViewer.viewport.Height() {
+		top := m.fileViewer.viewport.YOffset() + 1
+		bot := top + m.fileViewer.viewport.Height() - 1
 		if bot > len(m.fileViewer.lines) {
 			bot = len(m.fileViewer.lines)
 		}

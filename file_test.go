@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -92,7 +92,7 @@ func pickIndex(t *testing.T, m *model, idx int) {
 	// with known fixture sizes this is reliable.
 	// Caller is responsible for picking a sane target.
 	for n := 0; n < idx; n++ {
-		upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 		*m = upd.(model)
 	}
 }
@@ -110,7 +110,7 @@ func openFile(t *testing.T, m *model, rel string) {
 		// `l` on a file is a no-op in the picker; only `enter`
 		// sets Path. Use `enter`.
 		pickIndex(t, m, 1)
-		upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		*m = upd.(model)
 		if m.state != stateFileView {
 			t.Fatalf("expected stateFileView after selecting %q; got %v", rel, m.state)
@@ -122,7 +122,7 @@ func openFile(t *testing.T, m *model, rel string) {
 		// Top-level dirs are at indices 0..N-1 (alphabetical).
 		// Single dir in fixture: `src` at index 0.
 		pickIndex(t, m, i)
-		upd, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		upd, cmd := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 		*m = upd.(model)
 		if cmd != nil {
 			msg := cmd()
@@ -136,7 +136,7 @@ func openFile(t *testing.T, m *model, rel string) {
 	// The file is at index 0 inside its directory. `l` enters
 	// directories but does NOT select files — only `enter` does.
 	pickIndex(t, m, 0)
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	*m = upd.(model)
 	if m.state != stateFileView {
 		t.Fatalf("expected stateFileView after selecting %q; got %v", rel, m.state)
@@ -153,7 +153,7 @@ func TestTab_TogglesBetweenMessageAndFiles(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "msg"}
 	m.refreshViewport()
 
-	tab := tea.KeyMsg{Type: tea.KeyTab}
+	tab := tea.KeyPressMsg{Code: tea.KeyTab}
 	updated, _ := m.Update(tab)
 	um := updated.(model)
 	if um.tab != tabFiles {
@@ -190,7 +190,7 @@ func TestFileView_CommentWholeFile(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
 
-	c := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}
+	c := tea.KeyPressMsg{Code: 'c', Text: "c"}
 	updated, _ := m.Update(c)
 	um := updated.(model)
 	if um.state != stateCommentComposer {
@@ -198,7 +198,7 @@ func TestFileView_CommentWholeFile(t *testing.T) {
 	}
 
 	um.commentTa.SetValue("rename alpha")
-	save := tea.KeyMsg{Type: tea.KeyEnter}
+	save := tea.KeyPressMsg{Code: tea.KeyEnter}
 	updated, _ = um.Update(save)
 	um = updated.(model)
 	if len(um.comments) != 1 {
@@ -223,20 +223,20 @@ func TestFileView_CommentSelection(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
 
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	um := upd.(model)
-	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	um = upd.(model)
 	if !um.fileViewer.visual.Active {
 		t.Fatalf("visual mode should be active")
 	}
-	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	um = upd.(model)
 	if um.state != stateCommentComposer {
 		t.Fatalf("expected composer; got %v", um.state)
 	}
 	um.commentTa.SetValue("wrap ctx")
-	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ = um.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	um = upd.(model)
 	if len(um.comments) != 1 {
 		t.Fatalf("expected 1 comment; got %d", len(um.comments))
@@ -261,17 +261,17 @@ func TestFileView_CommentInlineCharRange(t *testing.T) {
 		t.Fatalf("viewer content wrong: %q", m.fileViewer.content)
 	}
 
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	um := upd.(model)
 	for i := 0; i < 3; i++ {
-		upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		upd, _ = um.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 		um = upd.(model)
 	}
 
-	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	um = upd.(model)
 	um.commentTa.SetValue("trim prefix")
-	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ = um.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	um = upd.(model)
 	if len(um.comments) != 1 {
 		t.Fatalf("expected 1 comment; got %d", len(um.comments))
@@ -309,7 +309,7 @@ func TestUnifiedFlush_SendsAllKinds(t *testing.T) {
 		render.Comment{Kind: render.CommentFile, Path: "src/main.go", LineStart: 1, LineEnd: 3,
 			CharStart: -1, CharEnd: -1, Text: "file note", CreatedAt: time.Now().Add(time.Second)},
 	)
-	s := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	s := tea.KeyPressMsg{Code: 's', Text: "s"}
 	updated, _ := m.Update(s)
 	um := updated.(model)
 	if sent == "" {
@@ -329,7 +329,7 @@ func TestUnifiedFlush_SendsAllKinds(t *testing.T) {
 // returns to the message tab.
 func TestFileNav_EscReturnsToMessage(t *testing.T) {
 	m := attachFileFixture(t)
-	esc := tea.KeyMsg{Type: tea.KeyEsc}
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
 	updated, _ := m.Update(esc)
 	um := updated.(model)
 	if um.tab != tabMessage {
@@ -345,7 +345,7 @@ func TestFileNav_EscReturnsToMessage(t *testing.T) {
 func TestFileView_EscReturnsToDirNav(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
-	esc := tea.KeyMsg{Type: tea.KeyEsc}
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
 	updated, _ := m.Update(esc)
 	um := updated.(model)
 	if um.state != stateFileNav {
@@ -415,15 +415,16 @@ func TestFileView_ShortFileOmitsIndicator(t *testing.T) {
 func TestFileView_JScrollsViewport(t *testing.T) {
 	root, rel := longFileFixture(t, 100)
 	m := openFileInFixture(t, root, rel)
-	start := m.fileViewer.viewport.YOffset
+	start := m.fileViewer.viewport.YOffset()
 	for i := 0; i < 30; i++ {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 		mv := updated.(model)
 		m = &mv
 	}
-	if m.fileViewer.viewport.YOffset <= start {
+	if m.fileViewer.viewport.YOffset() <= start {
 		t.Errorf("expected viewport YOffset to advance after 30 j presses; start=%d now=%d",
-			start, m.fileViewer.viewport.YOffset)
+			start, m.fileViewer.viewport.YOffset(),
+		)
 	}
 	if m.fileViewer.cursor != 31 {
 		t.Errorf("expected cursor at line 31; got %d", m.fileViewer.cursor)
@@ -435,14 +436,15 @@ func TestFileView_JScrollsViewport(t *testing.T) {
 func TestFileView_PageDownScrolls(t *testing.T) {
 	root, rel := longFileFixture(t, 100)
 	m := openFileInFixture(t, root, rel)
-	start := m.fileViewer.viewport.YOffset
+	start := m.fileViewer.viewport.YOffset()
 	startCursor := m.fileViewer.cursor
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	mv := updated.(model)
 	m = &mv
-	if m.fileViewer.viewport.YOffset <= start {
+	if m.fileViewer.viewport.YOffset() <= start {
 		t.Errorf("expected PageDown to advance YOffset; start=%d now=%d",
-			start, m.fileViewer.viewport.YOffset)
+			start, m.fileViewer.viewport.YOffset(),
+		)
 	}
 	if m.fileViewer.cursor != startCursor {
 		t.Errorf("PageDown should not move cursor; was %d now %d",
@@ -455,11 +457,12 @@ func TestFileView_PageDownScrolls(t *testing.T) {
 func TestFileView_EndLandsAtBottom(t *testing.T) {
 	root, rel := longFileFixture(t, 100)
 	m := openFileInFixture(t, root, rel)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
 	mv := updated.(model)
 	m = &mv
 	if !m.fileViewer.viewport.AtBottom() {
-		t.Errorf("End should scroll viewport to bottom; YOffset=%d", m.fileViewer.viewport.YOffset)
+		t.Errorf("End should scroll viewport to bottom; YOffset=%d", m.fileViewer.viewport.YOffset(),
+		)
 	}
 }
 
@@ -472,12 +475,12 @@ func TestFileView_VTogglesHighlight(t *testing.T) {
 	if strings.Contains(before, "\x1b[38;5;51m") {
 		t.Fatalf("setup: highlight already present before `v`")
 	}
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	mv := upd.(model)
 	if !mv.fileViewer.visual.Active {
 		t.Fatalf("visual mode should be active after `v`")
 	}
-	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	upd, _ = mv.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	mv = upd.(model)
 	if mv.fileViewer.visual.CharC == 0 {
 		t.Fatalf("setup: `l` should have advanced CharC from 0")
@@ -494,14 +497,14 @@ func TestFileView_VTogglesHighlight(t *testing.T) {
 func TestFileView_EscClearsVisualHighlight(t *testing.T) {
 	root, rel := longFileFixture(t, 3)
 	m := openFileInFixture(t, root, rel)
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	mv := upd.(model)
-	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	upd, _ = mv.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	mv = upd.(model)
 	if !strings.Contains(mv.fileViewer.viewport.View(), "\x1b[38;5;51m") {
 		t.Fatalf("setup: highlight should be present after `v` then `l`")
 	}
-	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	upd, _ = mv.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	mv = upd.(model)
 	if mv.fileViewer.visual.Active {
 		t.Fatalf("visual mode should be inactive after Esc")
@@ -517,9 +520,9 @@ func TestFileView_EscClearsVisualHighlight(t *testing.T) {
 func TestFileView_LMovesVisualHighlight(t *testing.T) {
 	root, rel := longFileFixture(t, 3)
 	m := openFileInFixture(t, root, rel)
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	mv := upd.(model)
-	upd, _ = mv.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	upd, _ = mv.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	mv = upd.(model)
 	if mv.fileViewer.visual.CharC == 0 {
 		t.Fatalf("setup: `l` should have advanced CharC from 0")
@@ -536,13 +539,13 @@ func TestFileView_LMovesVisualHighlight(t *testing.T) {
 func TestFileView_NewCommentShowsYellowGutter(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
-	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	um := upd.(model)
 	if um.state != stateCommentComposer {
 		t.Fatalf("setup: expected composer; got %v", um.state)
 	}
 	um.commentTa.SetValue("rename alpha")
-	upd, _ = um.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	upd, _ = um.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	um = upd.(model)
 	if um.state != stateFileView {
 		t.Fatalf("after save: expected stateFileView; got %v", um.state)

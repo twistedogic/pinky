@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"charm.land/bubbles/v2/viewport"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -39,7 +39,7 @@ func newIdleModel(t *testing.T, src session.Source) model {
 	m.src = src
 	m.hist = nil
 	m.state = stateNav
-	m.viewport = viewport.New(80, 20)
+	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	m.width = 80
 	m.height = 24
 	m.refreshViewport() // seed viewport with placeholder
@@ -90,8 +90,8 @@ func TestSessionMsg_FirstMessageRendersIntoViewport(t *testing.T) {
 	m := newIdleModel(t, src)
 	// Pre-poll: latest is empty, viewport should show placeholder.
 	view := m.View()
-	if !strings.Contains(view, "waiting for agent") {
-		t.Errorf("placeholder expected before any message; got: %q", view)
+	if !strings.Contains(view.Content, "waiting for agent") {
+		t.Errorf("placeholder expected before any message; got: %q", view.Content)
 	}
 
 	// ponytail: live streaming is buffered; the viewport stays on
@@ -104,8 +104,8 @@ func TestSessionMsg_FirstMessageRendersIntoViewport(t *testing.T) {
 	updated, _ = got.Update(sessionMsg{entries: nil})
 	got = updated.(model)
 	view = got.View()
-	if strings.Contains(view, "waiting for agent") {
-		t.Errorf("placeholder should be gone after turn-end; got: %q", view)
+	if strings.Contains(view.Content, "waiting for agent") {
+		t.Errorf("placeholder should be gone after turn-end; got: %q", view.Content)
 	}
 	if got.latest.Text == "" {
 		t.Errorf("latest.Text should be set after turn-end")
@@ -197,14 +197,14 @@ func TestSessionMsg_EmptyPollPreservesYOffset(t *testing.T) {
 	updated, _ = got.Update(sessionMsg{entries: nil})
 	got = updated.(model)
 
-	maxOff := got.viewport.TotalLineCount() - got.viewport.Height
+	maxOff := got.viewport.TotalLineCount() - got.viewport.Height()
 	if maxOff < 6 {
 		t.Fatalf("test fixture too short to scroll; maxOff=%d", maxOff)
 	}
 
 	// Simulate "user is at the bottom, then scrolls up 5 lines".
 	got.viewport.SetYOffset(maxOff - 5)
-	upOff := got.viewport.YOffset
+	upOff := got.viewport.YOffset()
 	if upOff <= 0 {
 		t.Fatalf("setup: scroll-up should leave YOffset > 0; got %d", upOff)
 	}
@@ -212,8 +212,8 @@ func TestSessionMsg_EmptyPollPreservesYOffset(t *testing.T) {
 	// Empty poll — must not move YOffset.
 	updated2, _ := got.Update(sessionMsg{entries: nil})
 	got2 := updated2.(model)
-	if got2.viewport.YOffset != upOff {
-		t.Errorf("empty poll moved YOffset: was %d, now %d", upOff, got2.viewport.YOffset)
+	if got2.viewport.YOffset() != upOff {
+		t.Errorf("empty poll moved YOffset: was %d, now %d", upOff, got2.viewport.YOffset())
 	}
 }
 
@@ -230,9 +230,9 @@ func TestSessionMsg_NewCommitGoesToTop(t *testing.T) {
 	}})
 	got := updated.(model)
 
-	maxOff := got.viewport.TotalLineCount() - got.viewport.Height
+	maxOff := got.viewport.TotalLineCount() - got.viewport.Height()
 	got.viewport.SetYOffset(maxOff - 3)
-	upOff := got.viewport.YOffset
+	upOff := got.viewport.YOffset()
 	if upOff <= 0 {
 		t.Fatalf("setup: scroll-up should leave YOffset > 0; got %d", upOff)
 	}
@@ -242,7 +242,7 @@ func TestSessionMsg_NewCommitGoesToTop(t *testing.T) {
 		{Role: session.RoleAssistant, Text: "# Different\n\nbody"},
 	}})
 	got2 := updated2.(model)
-	if got2.viewport.YOffset != 0 {
-		t.Errorf("new message should land at top; YOffset=%d", got2.viewport.YOffset)
+	if got2.viewport.YOffset() != 0 {
+		t.Errorf("new message should land at top; YOffset=%d", got2.viewport.YOffset())
 	}
 }

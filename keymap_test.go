@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestNavKey_Q_Quits: pressing `q` in nav state quits the program.
@@ -13,7 +13,7 @@ func TestNavKey_Q_Quits(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateNav
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
 		t.Error("expected tea.Quit when q is pressed in nav state")
 	}
@@ -29,7 +29,7 @@ func TestNavKey_N_EntersCompose(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateNav
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cmd != nil {
 		t.Errorf("did not expect a cmd on entering compose; got %v", cmd)
 	}
@@ -43,7 +43,7 @@ func TestPickerKey_Q_Quits(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = statePicking
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
 		t.Error("expected tea.Quit when q is pressed in picker state")
 	}
@@ -58,7 +58,7 @@ func TestComposeKey_C_TypesC(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateCompose
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	if cmd == nil {
 		// textarea.Update returns a command; absence would mean
 		// the rune was swallowed instead of typed.
@@ -81,11 +81,11 @@ func TestHelpKey_TogglesShowAll(t *testing.T) {
 	m.state = stateNav
 	m.refreshViewport()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Text: "?"})
 	if !updated.(model).help.ShowAll {
 		t.Error("expected help.ShowAll=true after pressing ?")
 	}
-	updated2, _ := updated.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated2, _ := updated.(model).Update(tea.KeyPressMsg{Text: "?"})
 	if updated2.(model).help.ShowAll {
 		t.Error("expected help.ShowAll=false after pressing ? again")
 	}
@@ -105,7 +105,7 @@ func newIdleModelForKeymap(t *testing.T) model {
 	cta.SetWidth(80)
 	return model{
 		state:     stateNav,
-		viewport:  viewport.New(80, 20),
+		viewport:  viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		textarea:  ta,
 		commentTa: cta,
 		width:     80,

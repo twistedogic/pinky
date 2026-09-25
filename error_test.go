@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/twistedogic/pinky/internal/session"
 )
@@ -23,7 +23,7 @@ func TestAttachFailure_ShowsErrorInTUI(t *testing.T) {
 	m.height = 24
 	m.state = statePicking
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(model)
 
 	if got.state != stateError {
@@ -39,12 +39,12 @@ func TestAttachFailure_ShowsErrorInTUI(t *testing.T) {
 
 	// View should render the error.
 	view := got.View()
-	if !strings.Contains(strings.ToLower(view), "error") {
-		t.Errorf("expected error message in view; got: %q", view)
+	if !strings.Contains(strings.ToLower(view.Content), "error") {
+		t.Errorf("expected error message in view; got: %q", view.Content)
 	}
 
 	// Now any key quits.
-	updated2, cmd2 := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated2, cmd2 := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd2 == nil {
 		t.Error("expected tea.Quit when user dismisses the error")
 	}
@@ -59,9 +59,9 @@ func TestErrorState_QuitsOnAnyKey(t *testing.T) {
 	m.state = stateError
 	m.width = 80
 	m.height = 24
-	m.viewport = viewport.New(80, 20)
+	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Error("expected tea.Quit on any key in error state")
 	}
@@ -76,7 +76,7 @@ func TestErrorState_QuitsOnCtrlC(t *testing.T) {
 	m.err = errors.New("boom")
 	m.state = stateError
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Error("expected quit cmd on Ctrl+C in error state")
 	}

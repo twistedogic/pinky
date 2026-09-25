@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"charm.land/bubbles/v2/viewport"
 
 	"github.com/twistedogic/pinky/internal/session"
 )
@@ -20,15 +20,15 @@ func TestAttach_PopulatesViewportImmediately(t *testing.T) {
 	m.src = &fakeSource{}
 	m.hist = nil
 	m.state = stateNav
-	m.viewport = viewport.New(80, 20)
+	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	m.width = 80
 	m.height = 24
 	m.refreshViewport()
 
 	view := m.View()
-	if !strings.Contains(view, "waiting for agent") {
+	if !strings.Contains(view.Content, "waiting for agent") {
 		t.Errorf("after refreshViewport, view should contain placeholder; got:\n%q",
-			view[:min(len(view), 200)])
+			view.Content[:min(len(view.Content), 200)])
 	}
 }
 

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -34,7 +34,7 @@ func TestNavKey_C_NoSelectionOpensBlockComposer(t *testing.T) {
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	got := updated.(model)
 	if got.state != stateCommentComposer {
 		t.Errorf("state = %d want stateCommentComposer", got.state)
@@ -54,7 +54,7 @@ func TestNavKey_V_EntersVisual(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	initCommentTAForTest(&m)
 	got := updated.(model)
 	if got.nav.Visual != render.NavLine {
@@ -70,12 +70,12 @@ func TestNavKey_V_ThenV_Exits(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	got := updated.(model)
 	if got.nav.Visual != render.NavLine {
 		t.Fatal("first v should enter visual")
 	}
-	updated2, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	updated2, _ := got.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	got2 := updated2.(model)
 	if got2.nav.Visual != render.NavNone {
 		t.Errorf("second v should exit visual; got %v", got2.nav.Visual)
@@ -89,12 +89,12 @@ func TestNavKey_V_ThenEsc_Exits(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	got := updated.(model)
 	if got.nav.Visual != render.NavLine {
 		t.Fatal("v should enter visual")
 	}
-	updated2, _ := got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated2, _ := got.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got2 := updated2.(model)
 	if got2.nav.Visual != render.NavNone {
 		t.Errorf("Esc in visual should exit; got %v", got2.nav.Visual)
@@ -109,7 +109,7 @@ func TestNavKey_EscOutsideVisualIsNoop(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello\n\nbody"}
 	m.refreshViewport()
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got := updated.(model)
 	if got.state != stateNav {
 		t.Errorf("Esc outside visual should leave state in nav; got %d", got.state)
@@ -131,12 +131,12 @@ func TestNavKey_JK_MovesBlockCursor(t *testing.T) {
 		t.Fatalf("setup: expected >=3 blocks, got %d", len(m.blocks))
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	got := updated.(model)
 	if got.cursor.BlockIdx == 0 {
 		t.Errorf("j should advance cursor blockIdx; still at 0")
 	}
-	updated2, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated2, _ := got.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	got2 := updated2.(model)
 	if got2.cursor.BlockIdx != 0 {
 		t.Errorf("k should restore cursor to block 0; got %d", got2.cursor.BlockIdx)
@@ -154,12 +154,12 @@ func TestNavKey_HL_MovesCharCursor(t *testing.T) {
 	m.cursor.BlockIdx = 1
 	m.cursor.CharPos = 0
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	got := updated.(model)
 	if got.cursor.CharPos != 1 {
 		t.Errorf("l: CharPos = %d want 1", got.cursor.CharPos)
 	}
-	updated2, _ := got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated2, _ := got.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	got2 := updated2.(model)
 	if got2.cursor.CharPos != 0 {
 		t.Errorf("h: CharPos = %d want 0", got2.cursor.CharPos)
@@ -174,7 +174,7 @@ func TestNavKey_R_TriggersPoll(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# Hello"}
 	m.refreshViewport()
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	if cmd == nil {
 		t.Error("r: expected poll cmd")
 	}
@@ -193,7 +193,7 @@ func TestNavKey_C_WithSelection_AnchorsSelection(t *testing.T) {
 	m.nav.Visual = render.NavLine
 	m.selection = render.NavSelection{BlockIdx: 1, CharA: 2, CharC: 5}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	got := updated.(model)
 	if got.state != stateCommentComposer {
 		t.Errorf("state = %d want stateCommentComposer", got.state)
@@ -219,7 +219,7 @@ func TestNavKey_S_NavWithCommentsSends(t *testing.T) {
 	sendToPane = func(_, text string) error { sentText = text; return nil }
 	t.Cleanup(func() { sendToPane = prev })
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
 	got := updated.(model)
 	if len(got.comments) != 0 {
 		t.Errorf("comments should clear after successful send; got %d", len(got.comments))
@@ -242,7 +242,7 @@ func TestNavKey_S_NavWithoutCommentsIsNoop(t *testing.T) {
 	sendToPane = func(_, _ string) error { called = true; return nil }
 	t.Cleanup(func() { sendToPane = prev })
 
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	_, _ = m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
 	if called {
 		t.Error("s with no comments should not call inject")
 	}
@@ -263,14 +263,14 @@ func TestCommentComposer_EnterSavesAndExits(t *testing.T) {
 	sendToPane = func(_, _ string) error { sentCalls++; return nil }
 	t.Cleanup(func() { sendToPane = prev })
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = updated.(model)
 	if m.state != stateCommentComposer {
 		t.Fatalf("setup: state = %d want stateCommentComposer", m.state)
 	}
 	m.commentTa.SetValue("rename to foo")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(model)
 	if got.state != stateNav {
 		t.Errorf("state = %d want stateNav after Enter", got.state)
@@ -305,17 +305,17 @@ func TestCommentComposer_MultipleCommentsAccumulate(t *testing.T) {
 	t.Cleanup(func() { sendToPane = prev })
 
 	// First comment
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = updated.(model)
 	m.commentTa.SetValue("fix the title")
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(model)
 
 	// Second comment
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = updated.(model)
 	m.commentTa.SetValue("expand the body")
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(model)
 
 	if sentCalls != 0 {
@@ -347,13 +347,13 @@ func TestCommentComposer_EmptyEnterIsNoop(t *testing.T) {
 	sendToPane = func(_, _ string) error { sentCalls++; return nil }
 	t.Cleanup(func() { sendToPane = prev })
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = updated.(model)
 	if m.state != stateCommentComposer {
 		t.Fatalf("setup: state = %d want stateCommentComposer", m.state)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(model)
 	if got.state != stateNav {
 		t.Errorf("state = %d want stateNav", got.state)
@@ -377,11 +377,11 @@ func TestCommentComposer_EnterDoesNotInsertNewline(t *testing.T) {
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = updated.(model)
 	m.commentTa.SetValue("plain comment")
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(model)
 	if len(got.comments) != 1 {
 		t.Fatalf("comments = %d want 1", len(got.comments))
@@ -413,13 +413,13 @@ func TestCompose_I_TogglesIncludeComments(t *testing.T) {
 		t.Fatalf("setup: includeComments should start false")
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m = updated.(model)
 	if !m.includeComments {
 		t.Errorf("includeComments = false want true after first `i`")
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m = updated.(model)
 	if m.includeComments {
 		t.Errorf("includeComments = true want false after second `i`")

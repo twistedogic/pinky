@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
@@ -23,7 +23,7 @@ func TestHelp_AlwaysVisibleInIdleView(t *testing.T) {
 	m.refreshViewport()
 
 	view := m.View()
-	plain := stripANSI(view)
+	plain := stripANSI(view.Content)
 	if !strings.Contains(plain, "Hello") {
 		t.Errorf("agent message should remain visible; got first 200 chars:\n%q",
 			plain[:min(len(plain), 200)])
@@ -46,7 +46,7 @@ func TestHelp_AlwaysVisibleInPickerView(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	plain := stripANSI(view)
+	plain := stripANSI(view.Content)
 	// Picker ShortHelp includes Up/Down/Pick/Help.
 	for _, want := range []string{"up", "down", "select", "toggle help"} {
 		if !strings.Contains(plain, want) {
@@ -65,7 +65,7 @@ func TestHelp_AlwaysVisibleInErrorView(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	plain := stripANSI(view)
+	plain := stripANSI(view.Content)
 	if !strings.Contains(strings.ToLower(plain), "error") {
 		t.Errorf("error message should render; got: %q", plain)
 	}
@@ -81,13 +81,13 @@ func TestHelp_QuestionMarkTogglesFullHelp(t *testing.T) {
 	m.state = stateNav
 	m.refreshViewport()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
 	got := updated.(model)
 	if !got.help.ShowAll {
 		t.Fatal("expected ShowAll=true after pressing ?")
 	}
 	view := got.View()
-	plain := stripANSI(view)
+	plain := stripANSI(view.Content)
 	// Full help exposes each nav key on its own row with a
 	// per-key descriptor (post NavGroup expansion).
 	if !strings.Contains(plain, "next block") || !strings.Contains(plain, "comment composer") {
@@ -114,7 +114,7 @@ func TestVisual_StatusLineIndicatesActive(t *testing.T) {
 		t.Fatalf("VISUAL indicator should not be present before v; got status:\n%s", statusBefore)
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	got := updated.(model)
 	statusAfter := got.statusLine()
 	if !strings.Contains(statusAfter, "VISUAL") {
@@ -147,7 +147,7 @@ func TestSubmitComments_ClearsOnSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { sendToPane = prev })
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
 	got := updated.(model)
 
 	if sentPane != m.pane {
@@ -178,7 +178,7 @@ func TestSubmitComments_NoCommentsNoop(t *testing.T) {
 	}
 	t.Cleanup(func() { sendToPane = prev })
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
 	if called {
 		t.Error("s with no comments should not call inject.Send")
 	}
@@ -204,7 +204,7 @@ func TestVisual_JMovesCursorAcrossBlocks(t *testing.T) {
 	}
 	startBlock := m.cursor.BlockIdx
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updated.(model)
 	if m.cursor.BlockIdx <= startBlock {
 		t.Errorf("j did not advance cursor block: before=%d after=%d", startBlock, m.cursor.BlockIdx)
@@ -213,7 +213,7 @@ func TestVisual_JMovesCursorAcrossBlocks(t *testing.T) {
 	// Cyan left-gutter (▍) follows the cursor's block — every line
 	// inside the new block starts with ▍, the previous block's
 	// lines do not.
-	plain := stripANSI(m.View())
+	plain := stripANSI(m.View().Content)
 	focused := m.blocks[m.cursor.BlockIdx]
 	prev := m.blocks[startBlock]
 	for i := focused.StartLine; i <= focused.EndLine; i++ {
@@ -245,14 +245,14 @@ func TestVisual_VEnterThenJ_KeepsVisualActive(t *testing.T) {
 	m.refreshViewport()
 	m.reflow()
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	m = updated.(model)
 	if m.nav.Visual != render.NavLine {
 		t.Fatal("v should enter visual")
 	}
 	before := m.cursor.BlockIdx
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updated.(model)
 	if m.nav.Visual != render.NavLine {
 		t.Errorf("j in visual should keep visual active; got %v", m.nav.Visual)
@@ -279,8 +279,8 @@ func TestHelp_FullHelpHeightReservesSpace(t *testing.T) {
 	if got := m.helpHeight(); got < 1 {
 		t.Errorf("helpHeight() = %d, expected >=1", got)
 	}
-	if m.viewport.Height <= 0 {
-		t.Errorf("viewport height collapsed to %d", m.viewport.Height)
+	if m.viewport.Height() <= 0 {
+		t.Errorf("viewport height collapsed to %d", m.viewport.Height())
 	}
 }
 

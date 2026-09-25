@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/twistedogic/pinky/internal/session"
 	"github.com/twistedogic/pinky/internal/tmux"
@@ -60,7 +60,7 @@ func main() {
 		}
 	}
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fail(err)
 	}

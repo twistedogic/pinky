@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestFileView_ResizeKeepsCursorVisible: moving the cursor deep
@@ -21,7 +21,7 @@ func TestFileView_ResizeKeepsCursorVisible(t *testing.T) {
 			m = &mv
 
 			for i := 0; i < 100; i++ {
-				upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+				upd, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 				mv = upd.(model)
 				m = &mv
 			}
@@ -29,8 +29,8 @@ func TestFileView_ResizeKeepsCursorVisible(t *testing.T) {
 			upd, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
 			mv = upd.(model)
 			m = &mv
-			top := m.fileViewer.viewport.YOffset
-			bot := top + m.fileViewer.viewport.Height - 1
+			top := m.fileViewer.viewport.YOffset()
+			bot := top + m.fileViewer.viewport.Height() - 1
 			if cursor-1 < top || cursor-1 > bot {
 				t.Errorf("h=%d cursor=%d outside viewport [%d..%d]",
 					h, cursor, top, bot)
@@ -46,16 +46,16 @@ func TestFileView_ResizeKeepsCursorVisible(t *testing.T) {
 		m = &mv
 
 		for i := 0; i < 100; i++ {
-			upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+			upd, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 			mv = upd.(model)
 			m = &mv
 		}
 		cursor := m.fileViewer.cursor
-		upd, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+		upd, _ = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
 		mv = upd.(model)
 		m = &mv
-		top := m.fileViewer.viewport.YOffset
-		bot := top + m.fileViewer.viewport.Height - 1
+		top := m.fileViewer.viewport.YOffset()
+		bot := top + m.fileViewer.viewport.Height() - 1
 		if cursor-1 < top || cursor-1 > bot {
 			t.Errorf("cursor=%d outside viewport [%d..%d] after help toggle",
 				cursor, top, bot)

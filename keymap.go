@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/charmbracelet/bubbles/key"
+	"charm.land/bubbles/v2/key"
 )
 
 // keyMap is the declarative set of keybindings used by pinky. Most
