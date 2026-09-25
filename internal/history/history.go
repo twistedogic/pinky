@@ -3,7 +3,6 @@ package history
 
 import (
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,28 +17,21 @@ type Entry struct {
 }
 
 // History is an append-only JSONL writer for a given tmux pane.
+// ponytail: Append opens/writes/closes per call (no persistent handle).
+// The volume (one line per agent message + one per user redirect)
+// is too low for the open-file overhead to matter.
 type History struct {
 	path   string
 	paneID string
-	f      io.Closer
-	enc    *json.Encoder
 }
 
-// Open creates (or appends to) the history file and returns a History
-// bound to paneID.
+// Open resolves the history path and returns a History bound to paneID.
 func Open(paneID string) (*History, error) {
 	path, err := defaultPath()
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	return &History{path: path, paneID: paneID, f: f, enc: json.NewEncoder(f)}, nil
+	return &History{path: path, paneID: paneID}, nil
 }
 
 func defaultPath() (string, error) {
@@ -55,19 +47,15 @@ func defaultPath() (string, error) {
 
 // Append writes one entry to the history file.
 func (h *History) Append(role, text string) error {
-	return h.enc.Encode(&Entry{
+	f, err := os.OpenFile(h.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return json.NewEncoder(f).Encode(&Entry{
 		Ts:     time.Now(),
 		PaneID: h.paneID,
 		Role:   role,
 		Text:   text,
 	})
 }
-
-// Close flushes and closes the history file.
-func (h *History) Close() error {
-	if h.f == nil {
-		return nil
-	}
-	return h.f.Close()
-}
-

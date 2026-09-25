@@ -79,7 +79,7 @@ func footnoteLines(blocks []Block, comments []Comment) []footnote {
 				insertAt++
 			}
 		}
-		marker := c.Marker()
+		marker := footnoteMarker(c)
 		inline := c.CharStart >= 0
 		out = append(out, footnote{
 			lineIdx: insertAt,
@@ -90,39 +90,6 @@ func footnoteLines(blocks []Block, comments []Comment) []footnote {
 		})
 	}
 	return out
-}
-
-// InjectGutter writes a one-character left gutter in front of every
-// line of rendered: "▍" cyan for lines inside the focused block,
-// "▍" yellow for lines inside a block with comments, a space
-// otherwise. Cyan takes precedence over yellow so a focused-and-
-// commented block reads as "you're here" first, "has feedback"
-// second. Pure function — the model layer passes its focused-block
-// decision as a parameter.
-func InjectGutter(rendered string, blocks []Block, focused int) string {
-	const cyan = "\x1b[38;5;51m"
-	const yellow = "\x1b[38;5;228m"
-	const reset = "\x1b[0m"
-	lines := strings.Split(rendered, "\n")
-	var b strings.Builder
-	for i, line := range lines {
-		idx := CurrentBlockIdx(blocks, i)
-		switch {
-		case focused >= 0 && idx == focused:
-			b.WriteString(cyan)
-			b.WriteRune('▍')
-			b.WriteString(reset)
-		case idx >= 0 && blocks[idx].HasComment:
-			b.WriteString(yellow)
-			b.WriteRune('▍')
-			b.WriteString(reset)
-		default:
-			b.WriteByte(' ')
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 // InjectGutterWrapped is word-wrap-aware: each rendered source

@@ -21,7 +21,7 @@ func openCodex(pid int, cwd string) (*codexSource, error) {
 	// 1. cwd-based discovery (plannotator convention). codex doesn't
 	//    depend on cwd, but the date tree makes this the most
 	//    reliable fallback.
-	if path, err := codexByCwd(cwd); err == nil {
+	if path, err := codexByCwd(); err == nil {
 		debugLogf("openCodex(%d): discovered via sessions root: %s", pid, path)
 		return &codexSource{path: path}, nil
 	} else {
@@ -95,8 +95,9 @@ func codexSessionFile(pid int) (string, error) {
 
 // codexByCwd finds the newest codex session JSONL via the cwd-based
 // convention (plannotator): `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`.
-// Newest by filename across all date subdirs.
-func codexByCwd(cwd string) (string, error) {
+// Newest by filename across all date subdirs. The layout is
+// cwd-independent so no cwd parameter is needed.
+func codexByCwd() (string, error) {
 	home, err := codexHome()
 	if err != nil {
 		return "", err
@@ -130,7 +131,6 @@ func codexByCwd(cwd string) (string, error) {
 	if newest == "" {
 		return "", fmt.Errorf("no rollout-*.jsonl files under %s", root)
 	}
-	_ = cwd // accepted but currently unused; codex's layout is cwd-independent
 	return newest, nil
 }
 

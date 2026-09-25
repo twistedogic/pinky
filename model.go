@@ -246,10 +246,6 @@ func (m *model) viewportSize() (int, int) {
 
 // idle is the shared tail of attach/attachWithFile: the view setup
 // (placeholder seed, textareas, comment slice) once source +
-// history are resolved. ponytail: pull the shared 25 lines out so the
-// two entry points only have to source/resolve before calling.
-// idle is the shared tail of attach/attachWithFile: the view setup
-// (placeholder seed, textareas, comment slice) once source +
 // history are resolved. Source and history come from the caller
 // (session.Open + history.Open for the picker path; session.OpenFile
 // only for --session-file); everything below is identical.
@@ -430,11 +426,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Ctrl+C is global across every state; `?` toggles between the
-	// short help footer and the expanded (multi-column) help.
-	if false {
-		return m, tea.Quit
-	}
+	// `?` toggles between the short help footer and the expanded
+	// (multi-column) help.
 	if key.Matches(msg, defaultKeyMap.Help) {
 		m.help.ShowAll = !m.help.ShowAll
 		m.reflow()
@@ -569,13 +562,6 @@ func isEsc(msg tea.KeyMsg) bool {
 func isKeyRune(msg tea.KeyMsg, r rune) bool {
 	kp, ok := msg.(tea.KeyPressMsg)
 	return ok && kp.Mod == 0 && kp.Code == r
-}
-
-// keyMsg extracts a Key struct from a KeyMsg for direct field access
-// (Code, Mod, Text). Returns ok=false for non-press / release msgs.
-func keyMsg(msg tea.KeyMsg) (tea.Key, bool) {
-	kp, ok := msg.(tea.KeyPressMsg)
-	return tea.Key(kp), ok
 }
 
 // dispatch sends text to the agent pane, recording to history on

@@ -19,7 +19,7 @@ func TestGutter_FocusedBlockCyan(t *testing.T) {
 		{Kind: BlockParagraph, StartLine: 2, EndLine: 3},
 	}
 	rendered := " h0\n h1\n p2\n p3\n"
-	out := InjectGutter(rendered, blocks, 0)
+	out, _ := InjectGutterWrapped(rendered, blocks, 0, 0)
 	if !strings.Contains(out, gutterCyanANSI+"▍"+gutterReset+" h0") {
 		t.Errorf("expected cyan gutter on first line of focused block; got:\n%s", out)
 	}
@@ -34,7 +34,7 @@ func TestGutter_CommentedBlockYellow(t *testing.T) {
 		{Kind: BlockParagraph, StartLine: 2, EndLine: 3, HasComment: true},
 	}
 	rendered := " h0\n\n p2\n p3\n"
-	out := InjectGutter(rendered, blocks, -1)
+	out, _ := InjectGutterWrapped(rendered, blocks, -1, 0)
 	if !strings.Contains(out, gutterYellowANSI+"▍"+gutterReset+" p2") {
 		t.Errorf("expected yellow gutter on commented block; got:\n%s", out)
 	}
@@ -49,7 +49,7 @@ func TestGutter_GapLineSpace(t *testing.T) {
 		{Kind: BlockParagraph, StartLine: 2, EndLine: 3},
 	}
 	rendered := " h0\n\n p2\n p3\n"
-	out := InjectGutter(rendered, blocks, 0)
+	out, _ := InjectGutterWrapped(rendered, blocks, 0, 0)
 	lines := strings.Split(out, "\n")
 	if len(lines) < 2 {
 		t.Fatalf("setup: expected >= 2 lines, got %d", len(lines))
@@ -66,7 +66,7 @@ func TestGutter_FocusedWinsOverCommented(t *testing.T) {
 		{Kind: BlockParagraph, StartLine: 2, EndLine: 3, HasComment: true},
 	}
 	rendered := " h0\n\n p2\n p3\n"
-	out := InjectGutter(rendered, blocks, 1) // focused=1, the commented block
+	out, _ := InjectGutterWrapped(rendered, blocks, 1, 0) // focused=1, the commented block
 	if !strings.Contains(out, gutterCyanANSI+"▍"+gutterReset+" p2") {
 		t.Errorf("focused+commented block should get cyan gutter; got:\n%s", out)
 	}
@@ -78,7 +78,7 @@ func TestGutter_FocusedWinsOverCommented(t *testing.T) {
 func TestGutter_NoFocusedNoCommentedEmitsOnlySpace(t *testing.T) {
 	blocks := []Block{{Kind: BlockParagraph, StartLine: 0, EndLine: 1}}
 	rendered := " p0\n p1\n"
-	out := InjectGutter(rendered, blocks, -1)
+	out, _ := InjectGutterWrapped(rendered, blocks, -1, 0)
 	if strings.Contains(out, "▍") {
 		t.Errorf("no focused and no commented should produce no ▍; got:\n%s", out)
 	}
@@ -107,7 +107,7 @@ func TestGutter_SmokeCheck(t *testing.T) {
 		t.Fatal("setup: block 0 should have HasComment=true")
 	}
 	// Focus block 0 (commented): cyan should win over yellow.
-	out := InjectGutter(rendered, blocks, 0)
+	out, _ := InjectGutterWrapped(rendered, blocks, 0, 0)
 	if !strings.Contains(out, gutterCyanANSI+"▍"+gutterReset) {
 		t.Errorf("focused+commented block should still have cyan gutter; got:\n%s", out)
 	}
@@ -116,7 +116,7 @@ func TestGutter_SmokeCheck(t *testing.T) {
 	}
 	// Focus block 1 (uncommented): block 0 (commented, unfocused) should
 	// show yellow gutter; block 1 should show cyan.
-	out2 := InjectGutter(rendered, blocks, 1)
+	out2, _ := InjectGutterWrapped(rendered, blocks, 1, 0)
 	if !strings.Contains(out2, gutterYellowANSI+"▍"+gutterReset) {
 		t.Errorf("unfocused commented block should still show yellow gutter; got:\n%s", out2)
 	}

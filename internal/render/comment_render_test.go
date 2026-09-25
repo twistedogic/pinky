@@ -118,14 +118,14 @@ func TestRenderMessageWithComments_MultipleCommentsStack(t *testing.T) {
 	}
 }
 
-func TestMarker(t *testing.T) {
+func TestFootnoteMarker(t *testing.T) {
 	block := Comment{CharStart: -1}
-	if block.Marker() != "▸" {
-		t.Errorf("block marker = %q want ▸", block.Marker())
+	if footnoteMarker(block) != "▸" {
+		t.Errorf("block marker = %q want ▸", footnoteMarker(block))
 	}
 	inline := Comment{CharStart: 5}
-	if inline.Marker() != "•" {
-		t.Errorf("inline marker = %q want •", inline.Marker())
+	if footnoteMarker(inline) != "•" {
+		t.Errorf("inline marker = %q want •", footnoteMarker(inline))
 	}
 }
 

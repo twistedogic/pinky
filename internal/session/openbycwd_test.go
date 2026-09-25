@@ -66,7 +66,7 @@ func TestCodexByCwd_FindsNewestRollout(t *testing.T) {
 		}
 	}
 
-	got, err := codexByCwd("/anywhere")
+	got, err := codexByCwd()
 	if err != nil {
 		t.Fatalf("codexByCwd: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCodexByCwd_IgnoresNonRollout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := codexByCwd("")
+	got, err := codexByCwd()
 	if err != nil {
 		t.Fatalf("codexByCwd: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestCodexByCwd_IgnoresNonRollout(t *testing.T) {
 func TestCodexByCwd_NoSessions(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("CODEX_HOME", tmp)
-	if _, err := codexByCwd(""); err == nil {
+	if _, err := codexByCwd(); err == nil {
 		t.Error("expected error when no sessions exist")
 	}
 }

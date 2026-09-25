@@ -248,23 +248,15 @@ type Comment struct {
 	CreatedAt time.Time
 }
 
-// IsBlock reports whether c is a block-kind comment.
-func (c Comment) IsBlock() bool { return c.Kind == CommentBlock }
-
-// IsFile reports whether c is a file-kind comment.
-func (c Comment) IsFile() bool { return c.Kind == CommentFile }
-
 // IsInlineSelection reports whether c carries a byte-range inline
 // selection (vs. a whole-block or whole-line range). Applies to
 // both block-kind and file-kind comments.
 func (c Comment) IsInlineSelection() bool { return c.CharStart >= 0 }
 
-// Marker returns the footnote marker for a comment: "▸" for
-// block-level (CharStart < 0), "•" for inline. It is consumed by
-// the footnote line renderer (the ▸/• prefix on the comment's
-// footnote). It no longer feeds the in-block gutter marker; the
-// model layer's left-gutter replaces that visual.
-func (c Comment) Marker() string {
+// footnoteMarker returns "▸" for block-level (CharStart < 0),
+// "•" for inline. Consumed by footnoteLines. Not exported — the
+// model layer's left-gutter replaces the in-block visual.
+func footnoteMarker(c Comment) string {
 	if c.CharStart < 0 {
 		return "▸"
 	}
