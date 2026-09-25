@@ -8,7 +8,7 @@ Guidelines for AI agents and contributors.
 
 ## CI / Automation
 
-- Use [Task](https://taskfile.dev/docs/getting-started) (a `Taskfile.yml`) as the CI runner and shared automation entry point; keep commands reproducible locally and in CI.
+- Run everything through `Taskfile.yml`; shell one-liners in docs/scripts won't reproduce in CI.
 
 ## Commit Messages
 
@@ -26,6 +26,11 @@ Guidelines for AI agents and contributors.
 
 - Prefer structured logging (key/value, consistent levels, machine-parseable) over unstructured strings.
 - For servers, also expose Prometheus metrics (counters, gauges, histograms) on a standard scrape endpoint.
+
+## Go
+
+- Before hand-rolling, search stdlib and direct deps: `go doc <pkg>`, `go doc <pkg>.<Symbol>`, `go doc -all <pkg>`. Reuse the existing symbol over a private reimplementation.
+- Near-fit, not exact fit: wrap with a small adapter; do not fork a parallel implementation.
 
 ## Maintenance
 
