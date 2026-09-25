@@ -131,8 +131,8 @@ func TestSessionMsg_AssistantOnlyPollSetsLatest(t *testing.T) {
 	}
 }
 
-// TestSessionMsg_TextChangeClearsComments verifies that committing
-// a new message at a turn boundary resets the comments slice.
+// TestSessionMsg_TextChangeClearsComments verifies that when the
+// latest message text changes, the comments slice is reset.
 func TestSessionMsg_TextChangeClearsComments(t *testing.T) {
 	src := &fakeSource{}
 	m := newIdleModel(t, src)
@@ -142,19 +142,13 @@ func TestSessionMsg_TextChangeClearsComments(t *testing.T) {
 		{BlockIdx: 0, Text: "old comment"},
 	}
 
-	// ponytail: live streaming buffers; turn-end (empty poll) commits
-	// and is what clears the comments tied to the prior message.
+	// New message arrives — commits immediately and clears comments.
 	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: "new message"},
 	}})
 	got := updated.(model)
-	if len(got.comments) != 1 {
-		t.Errorf("mid-stream poll should not clear comments; got %d", len(got.comments))
-	}
-	updated, _ = got.Update(sessionMsg{entries: nil})
-	got = updated.(model)
 	if len(got.comments) != 0 {
-		t.Errorf("turn-end commit should clear comments; got %d", len(got.comments))
+		t.Errorf("new-text poll should clear comments; got %d", len(got.comments))
 	}
 }
 
@@ -223,40 +217,32 @@ func TestSessionMsg_EmptyPollPreservesYOffset(t *testing.T) {
 	}
 }
 
-// TestSessionMsg_StreamingPollDoesNotMoveViewport: a non-empty
-// poll buffers the new turn into pendingLatest but does NOT call
-// refreshViewport, so YOffset is untouched. The commit on the
-// following empty poll DOES call refreshViewport (SetContent), which
-// Bubble Tea's viewport resets to 0 — landing the user at the top of
-// the new turn, the whole-message view they asked for.
-func TestSessionMsg_StreamingPollDoesNotMoveViewport(t *testing.T) {
+// TestSessionMsg_NewCommitGoesToTop: every new assistant message
+// pins YOffset to the top so the first sentence is visible. This
+// is the regression test for the "first sentence missing" bug —
+// Bubble Tea's SetContent preserves YOffset, so a fresh commit
+// would otherwise inherit the prior scroll position.
+func TestSessionMsg_NewCommitGoesToTop(t *testing.T) {
 	m := newIdleModel(t, &fakeSource{})
 	text := longMsg()
 	updated, _ := m.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: text},
 	}})
 	got := updated.(model)
-	updated, _ = got.Update(sessionMsg{entries: nil})
-	got = updated.(model)
 
 	maxOff := got.viewport.TotalLineCount() - got.viewport.Height
-	got.viewport.SetYOffset(maxOff - 5)
+	got.viewport.SetYOffset(maxOff - 3)
 	upOff := got.viewport.YOffset
+	if upOff <= 0 {
+		t.Fatalf("setup: scroll-up should leave YOffset > 0; got %d", upOff)
+	}
 
-	// New turn streams in — buffered, viewport stays put.
+	// New message — must land at top regardless of prior scroll.
 	updated2, _ := got.Update(sessionMsg{entries: []session.Message{
 		{Role: session.RoleAssistant, Text: "# Different\n\nbody"},
 	}})
 	got2 := updated2.(model)
-	if got2.viewport.YOffset != upOff {
-		t.Errorf("streaming poll moved YOffset; was %d now %d",
-			upOff, got2.viewport.YOffset)
-	}
-	// Turn-end commit refreshes the viewport — YOffset goes to 0
-	// so the user sees the START of the new turn, not the bottom.
-	updated3, _ := got2.Update(sessionMsg{entries: nil})
-	got3 := updated3.(model)
-	if got3.viewport.YOffset != 0 {
-		t.Errorf("turn-end commit should land at top of new turn; YOffset=%d", got3.viewport.YOffset)
+	if got2.viewport.YOffset != 0 {
+		t.Errorf("new message should land at top; YOffset=%d", got2.viewport.YOffset)
 	}
 }

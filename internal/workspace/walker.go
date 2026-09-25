@@ -81,16 +81,21 @@ func walkDir(root, dir string, depth int, out *[]Entry) error {
 			continue
 		}
 		isDir := e.IsDir()
-		if isDir {
-			if err := walkDir(root, full, depth+1, out); err != nil {
-				return err
-			}
-		}
+		// ponytail: append self before recursing so the output is
+		// pre-order (dir, then contents). The file navigator's
+		// collapse logic relies on this: a collapsed dir's entry
+		// must appear before its descendants so skipBelow fires
+		// in time.
 		*out = append(*out, Entry{
 			Path:  rel,
 			IsDir: isDir,
 			Depth: depth,
 		})
+		if isDir {
+			if err := walkDir(root, full, depth+1, out); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -92,16 +92,8 @@ func TestSessionMsg_ContinuousPollingDeliversNewMessages(t *testing.T) {
 	mv3 := upd3.(model)
 	m = &mv3
 
-	// ponytail: buffered mode — the second message is buffered into
-	// pendingLatest. The follow-up empty poll (which the rescheduled
-	// Tick will deliver) commits it.
-	if m.latest.Text != "" {
-		t.Errorf("mid-stream poll should not commit; latest.Text=%q", m.latest.Text)
-	}
-	upd4, _ := m.Update(sessionMsg{entries: nil})
-	mv4 := upd4.(model)
-	if mv4.latest.Text != "second — must appear" {
-		t.Errorf("BUG: latest.Text = %q; want %q (turn-end commit missing)",
-			mv4.latest.Text, "second — must appear")
+	if m.latest.Text != "second — must appear" {
+		t.Errorf("BUG: latest.Text = %q; want %q (poll never re-armed)",
+			m.latest.Text, "second — must appear")
 	}
 }

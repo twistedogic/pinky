@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,7 +19,7 @@ import (
 	"github.com/twistedogic/pinky/internal/inject"
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
-	"github.com/twistedogic/pinky/internal/workspace"
+	"github.com/charmbracelet/bubbles/filepicker"
 )
 
 const (
@@ -105,13 +106,11 @@ type model struct {
 	hist *history.History
 
 	// Latest-message view state. pinky always renders the most recent
-	// COMPLETE assistant message; older messages are not displayed.
-	// `latest` is committed at turn boundaries (an empty poll after a
-	// non-empty one). During streaming we accumulate the most recent
-	// assistant text in `pendingLatest` and leave `latest` untouched.
+	// assistant message; older messages are not displayed.
 	latest         session.Message
-	pendingLatest  session.Message
 	blocks         []render.Block
+	wrappedToSrc   []int // viewport yOffset → source-line index, for nav
+	sourceToFirst  []int // source-line index → first wrapped yOffset, for nav
 
 	viewport viewport.Model
 	textarea textarea.Model
@@ -143,13 +142,10 @@ type model struct {
 	tab        tab
 	fileReturn state
 
-	// File review tab state. fileEntries is the raw walker output;
-	// the model layer applies the collapse map at render time to
-	// produce the visible tree. fileCursor indexes into the
-	// visible tree (after collapse).
-	fileEntries   []workspace.Entry
-	fileCursor    int
-	fileCollapsed map[string]bool
+	// File review tab state. filePicker is the bubbles directory
+	// browser rooted at fileRoot; selecting a file moves the model
+	// into stateFileView.
+	filePicker filepicker.Model
 	fileRoot      string
 
 	// fileViewer is the state for stateFileView.
@@ -187,10 +183,15 @@ func (m *model) cursorOnScreen() bool {
 	if len(m.blocks) == 0 {
 		return true
 	}
-	line := render.NavLineIndex(m.blocks, m.cursor)
-	top := m.viewport.YOffset
-	bot := top + m.viewport.Height
-	return line >= top && line <= bot
+	srcLine := render.NavLineIndex(m.blocks, m.cursor)
+	// Compare in source-line space: both the cursor's source line
+	// and the viewport's source line (translating YOffset back via
+	// the wrapped-line map).
+	wrapTop := m.viewport.YOffset
+	wrapBot := wrapTop + m.viewport.Height
+	srcTop := m.wrappedYOffsetToSource(wrapTop)
+	srcBot := m.wrappedYOffsetToSource(wrapBot - 1)
+	return srcLine >= srcTop && srcLine <= srcBot
 }
 
 // scrollCursorIntoView adjusts the viewport's YOffset so the cursor
@@ -205,7 +206,10 @@ func (m *model) scrollCursorIntoView() {
 	if m.cursorOnScreen() {
 		return
 	}
-	target := render.NavLineIndex(m.blocks, m.cursor)
+	srcLine := render.NavLineIndex(m.blocks, m.cursor)
+	// Translate the target source line into wrapped-YOffset space
+	// so the viewport actually lands on that markdown line.
+	target := m.sourceYOffset(srcLine)
 	off := max(target-m.viewport.Height+1, 0)
 	m.viewport.SetYOffset(off)
 }
@@ -351,6 +355,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == stateFileView && m.fileViewer.path != "" {
 			m.refreshFileView()
 		}
+		// ponytail: let the bubbles filepicker size itself.
+		m.filePicker.SetHeight(msg.Height - 5)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -366,22 +372,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if len(msg.entries) == 0 {
 			m.streaming = false
-			// ponytail: empty poll after a non-empty one means the
-			// previous turn just completed. Commit the most recent
-			// assistant text we buffered to `m.latest` so the view
-			// shows the LAST COMPLETE message — not the latest chunk
-			// of a still-streaming turn.
-			if m.pendingLatest.Text != "" && m.pendingLatest.Text != m.latest.Text {
-				m.latest = m.pendingLatest
-				m.pendingLatest = session.Message{}
-				m.comments = nil
-				m.refreshViewport()
-			}
 			return m, pollCmd(m.src)
 		}
-		// ponytail: don't replace m.latest on every streaming chunk.
-		// Buffer the latest assistant text in `pendingLatest` and
-		// only commit at the next empty poll (turn end).
+		// Find the latest assistant message in this poll. A user redirect
+		// arriving after the agent's last reply should NOT replace the
+		// view — we want the agent's most recent text, not the user's own.
 		var last *session.Message
 		for i := range msg.entries {
 			if msg.entries[i].Role == session.RoleAssistant {
@@ -389,13 +384,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if last != nil {
-			m.streaming = true
-			m.pendingLatest = *last
+			if last.Text != m.latest.Text {
+				m.comments = nil
+			}
+			m.latest = *last
 			if m.hist != nil {
 				_ = m.hist.Append(string(last.Role), last.Text)
 			}
+			m.streaming = true
+			m.refreshViewport()
+			// ponytail: Bubble Tea's SetContent preserves YOffset
+			// across calls. Pin to top on every commit so the
+			// first sentence of the latest message is always
+			// visible — the viewport's own scroll state is the
+			// single source of truth, no custom buffer needed.
+			m.viewport.GotoTop()
 		}
 		return m, pollCmd(m.src)
+	}
+
+	// ponytail: route any unhandled msg to the bubbles filepicker
+	// when we're on the file tab — its Init() emits a readDirMsg
+	// on entry, and Enter/Back emit follow-up reads. Anything the
+	// picker doesn't recognise is silently dropped.
+	if m.state == stateFileNav || m.state == stateFileView {
+		updated, cmd := m.filePicker.Update(msg)
+		m.filePicker = updated
+		if cmd != nil {
+			return m, cmd
+		}
 	}
 
 	var cmds []tea.Cmd
@@ -433,7 +450,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case stateCommentComposer, statePicking, stateError:
 			// swallowed
 		default:
-			m.toggleTab()
+			return m, m.toggleTab()
 		}
 		return m, nil
 	}
@@ -464,17 +481,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // toggleTab switches between the message tab and the file review
 // tab, remembering / restoring the sub-state so Tab round-trips are
 // cheap.
-func (m *model) toggleTab() {
+func (m *model) toggleTab() tea.Cmd {
 	switch m.tab {
 	case tabMessage:
 		// Remember the message sub-state so Tab back returns to it.
 		m.fileReturn = m.state
 		m.tab = tabFiles
-		if len(m.fileEntries) == 0 {
+		if m.filePicker.CurrentDirectory == "" {
 			m.enterFileNav()
-		} else {
-			m.state = stateFileNav
+			return m.filePicker.Init()
 		}
+		m.state = stateFileNav
 		m.reflow()
 	case tabFiles:
 		m.tab = tabMessage
@@ -487,6 +504,7 @@ func (m *model) toggleTab() {
 		m.reflow()
 		m.refreshViewport()
 	}
+	return nil
 }
 
 // enterFileNav runs the workspace walker against m.fileRoot and
@@ -501,21 +519,16 @@ func (m *model) enterFileNav() {
 		m.refreshViewport()
 		return
 	}
-	entries, err := workspace.Walk(m.fileRoot)
-	if err != nil {
-		m.state = stateNav
-		m.latest = session.Message{
-			Role: session.RoleUser,
-			Text: "[workspace walk failed: " + err.Error() + "]",
-		}
-		m.refreshViewport()
-		return
-	}
-	m.fileEntries = entries
-	m.fileCursor = 0
-	if m.fileCollapsed == nil {
-		m.fileCollapsed = make(map[string]bool)
-	}
+	// ponytail: use the bubbles filepicker rooted at fileRoot.
+	// It manages its own directory traversal, selection, and
+	// back/forward navigation. pinky only watches filepicker.Path
+	// to know when the user has chosen a file.
+	fp := filepicker.New()
+	fp.CurrentDirectory = m.fileRoot
+	fp.DirAllowed = true
+	fp.FileAllowed = true
+	fp.ShowHidden = false
+	m.filePicker = fp
 	m.state = stateFileNav
 	m.reflow()
 }
@@ -810,128 +823,32 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, vpCmd
 }
 
-// visibleFileEntries returns the slice of entries shown after the
-// current collapse state is applied. The cursor (fileCursor) is an
-// index into this slice.
-func (m *model) visibleFileEntries() []workspace.Entry {
-	if len(m.fileEntries) == 0 {
-		return nil
-	}
-	// Walk entries in order; for each directory at depth > 0, skip
-	// its descendants when the dir's relative path is collapsed.
-	// Depth 0 (the root ".") is never collapsed.
-	skipBelow := -1 // -1 means "don't skip anything"
-	out := make([]workspace.Entry, 0, len(m.fileEntries))
-	for _, e := range m.fileEntries {
-		if skipBelow >= 0 && e.Depth > skipBelow {
-			continue
-		}
-		skipBelow = -1
-		out = append(out, e)
-		if e.IsDir && e.Depth > 0 && m.fileCollapsed[e.Path] {
-			// Skip descendants until we see a sibling at the same
-			// or shallower depth. We approximate with a sentinel
-			// that drops entries with depth > current dir depth.
-			skipBelow = e.Depth
-		}
-	}
-	return out
-}
-
-// handleFileNavKey routes keys in stateFileNav: j/k move the
-// cursor, h/l collapse/expand, Enter opens files / toggles
-// directories, c comments a file, s flushes, Esc / Tab return to
-// the message tab, q quits.
+// handleFileNavKey delegates to the bubbles filepicker for
+// directory traversal and selection, then opens the file viewer
+// when the picker reports a chosen file via filepicker.Path. The
+// pinky-level keys (c, s, q, Tab/Esc) are handled here.
 func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	visible := m.visibleFileEntries()
-	if key.Matches(msg, defaultKeyMap.FileNavDown) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'j') {
-		if len(visible) > 0 {
-			m.fileCursor = (m.fileCursor + 1) % len(visible)
-		}
-		return m, nil
-	}
-	if key.Matches(msg, defaultKeyMap.FileNavUp) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'k') {
-		if len(visible) > 0 {
-			m.fileCursor = (m.fileCursor - 1 + len(visible)) % len(visible)
-		}
-		return m, nil
-	}
-	if key.Matches(msg, defaultKeyMap.FileNavCollapse) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'h') {
-		if len(visible) == 0 {
-			return m, nil
-		}
-		cur := visible[m.fileCursor]
-		if cur.IsDir && cur.Depth > 0 && !m.fileCollapsed[cur.Path] {
-			m.fileCollapsed[cur.Path] = true
-			return m, nil
-		}
-		// Otherwise jump to parent (first ancestor directory or
-		// the root).
-		for i := m.fileCursor - 1; i >= 0; i-- {
-			if visible[i].IsDir && visible[i].Depth < cur.Depth {
-				m.fileCursor = i
-				return m, nil
-			}
-		}
-		return m, nil
-	}
-	if key.Matches(msg, defaultKeyMap.FileNavExpand) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'l') {
-		if len(visible) == 0 {
-			return m, nil
-		}
-		cur := visible[m.fileCursor]
-		if cur.IsDir && cur.Depth > 0 && m.fileCollapsed[cur.Path] {
-			delete(m.fileCollapsed, cur.Path)
-			return m, nil
-		}
-		// Jump to first child if the dir is expanded.
-		if cur.IsDir {
-			for i := m.fileCursor + 1; i < len(visible); i++ {
-				if visible[i].Depth == cur.Depth+1 {
-					m.fileCursor = i
-					return m, nil
-				}
-			}
-		}
-		return m, nil
-	}
-	if key.Matches(msg, defaultKeyMap.FileNavOpen) || msg.Type == tea.KeyEnter {
-		if len(visible) == 0 {
-			return m, nil
-		}
-		cur := visible[m.fileCursor]
-		if cur.IsDir {
-			if cur.Depth == 0 {
-				return m, nil
-			}
-			m.fileCollapsed[cur.Path] = !m.fileCollapsed[cur.Path]
-			return m, nil
-		}
-		// File → open viewer.
-		m.openFileViewer(cur.Path)
-		return m, nil
-	}
+	// pinky-level keys first.
 	if key.Matches(msg, defaultKeyMap.FileNavComment) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'c') {
-		if len(visible) == 0 {
+		path := m.filePicker.Path
+		if path == "" {
 			return m, nil
 		}
-		cur := visible[m.fileCursor]
-		if cur.IsDir {
-			return m, nil
+		rel, err := filepath.Rel(m.fileRoot, path)
+		if err != nil {
+			rel = path
 		}
-		// Whole-file comment anchor.
 		m.commentAnchor = commentAnchor{
 			kind:      render.CommentFile,
-			filePath:  cur.Path,
+			filePath:  rel,
 			lineStart: 1,
-			lineEnd:   m.fileLineCount(cur.Path),
+			lineEnd:   m.fileLineCount(rel),
 		}
 		m.enterCommentComposer(m.commentAnchor)
 		return m, nil
 	}
 	if key.Matches(msg, defaultKeyMap.FileNavBack) || msg.Type == tea.KeyEsc {
-		m.toggleTab()
-		return m, nil
+		return m, m.toggleTab()
 	}
 	if key.Matches(msg, defaultKeyMap.NavSend) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's') {
 		m.handleSend()
@@ -940,7 +857,23 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, defaultKeyMap.NavQuit) || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q') {
 		return m, tea.Quit
 	}
-	return m, nil
+
+	// Delegate to the filepicker. If it set Path, open the viewer.
+	prev := m.filePicker.Path
+	updated, cmd := m.filePicker.Update(msg)
+	m.filePicker = updated
+	if m.filePicker.Path != "" && m.filePicker.Path != prev {
+		rel, err := filepath.Rel(m.fileRoot, m.filePicker.Path)
+		if err != nil {
+			rel = m.filePicker.Path
+		}
+		m.openFileViewer(rel)
+		// Clear the picker's selection so the next time the user
+		// re-enters stateFileNav the picker doesn't immediately
+		// re-open the same file.
+		m.filePicker.Path = ""
+	}
+	return m, cmd
 }
 
 // fileLineCount returns the number of source lines in path, or 1
@@ -1462,6 +1395,8 @@ var tabChipStyle = lipgloss.NewStyle().
 func (m *model) refreshViewport() {
 	if m.latest.Text == "" {
 		m.blocks = nil
+		m.wrappedToSrc = nil
+		m.sourceToFirst = nil
 		m.viewport.SetContent(placeholderStyle.Render(placeholderText))
 		return
 	}
@@ -1470,15 +1405,61 @@ func (m *model) refreshViewport() {
 	rendered, blocks := render.RenderMessageWithComments(m.latest.Text, m.comments)
 	if rendered == "" {
 		// Renderer rejected this width (very narrow terminal): plain-text fallback.
+		m.wrappedToSrc = nil
+		m.sourceToFirst = nil
 		m.viewport.SetContent(m.latest.Text)
 		return
+	}
+	// ponytail: word-wrap to fit the viewport before the gutter is
+	// prepended. Without this, long lines get truncated on the right
+	// by the viewport's ansi.Cut. Width - 1 leaves room for the
+	// single-cell gutter character.
+	var wrapWidth int
+	if w := m.viewport.Width; w > 1 {
+		wrapWidth = w - 1
 	}
 	m.blocks = blocks
 	focused := m.cursor.BlockIdx
 	if focused < 0 || focused >= len(m.blocks) {
-		focused = render.CurrentBlockIdx(m.blocks, m.viewport.YOffset)
+		focused = render.CurrentBlockIdx(blocks, m.wrappedYOffsetToSource(m.viewport.YOffset))
 	}
-	m.viewport.SetContent(render.InjectGutter(rendered, m.blocks, focused))
+	guttered, w2s := render.InjectGutterWrapped(rendered, m.blocks, focused, wrapWidth)
+	m.wrappedToSrc = w2s
+	// Build the inverse: first wrapped line of each source line.
+	m.sourceToFirst = make([]int, len(strings.Split(rendered, "\n")))
+	for i := 1; i < len(w2s); i++ {
+		if w2s[i] != w2s[i-1] && m.sourceToFirst[w2s[i]] == 0 {
+			m.sourceToFirst[w2s[i]] = i
+		}
+	}
+	m.viewport.SetContent(guttered)
+}
+
+// wrappedYOffsetToSource translates a viewport YOffset (in wrapped
+// lines) back to the underlying markdown source-line index that
+// CurrentBlockIdx / NavLineIndex expect. Returns 0 when the
+// viewport is empty / no wrap map.
+func (m *model) wrappedYOffsetToSource(y int) int {
+	if len(m.wrappedToSrc) == 0 {
+		return 0
+	}
+	if y < 0 {
+		return m.wrappedToSrc[0]
+	}
+	if y >= len(m.wrappedToSrc) {
+		return m.wrappedToSrc[len(m.wrappedToSrc)-1]
+	}
+	return m.wrappedToSrc[y]
+}
+
+// sourceYOffset returns the first wrapped YOffset that belongs to
+// the given source line. Used to scroll the viewport to a block
+// boundary (e.g. when the cursor moves to a new block).
+func (m *model) sourceYOffset(src int) int {
+	if src < 0 || src >= len(m.sourceToFirst) {
+		return 0
+	}
+	return m.sourceToFirst[src]
 }
 
 func (m model) View() string {
@@ -1572,57 +1553,11 @@ func (m model) errorView() string {
 		bodyStyle.Render(m.err.Error())
 }
 
-// fileNavView renders the workspace tree. The cursor entry gets a
-// ▶ marker and a brighter style; other entries are dim. Directories
-// are prefixed with ▾ (expanded) or ▸ (collapsed).
+// fileNavView renders the workspace header followed by the
+// bubbles filepicker view (current directory listing).
 func (m model) fileNavView() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-
-	var b strings.Builder
-	b.WriteString(headerStyle.Render(fmt.Sprintf("workspace — %s", m.fileRoot)))
-	b.WriteByte('\n')
-
-	visible := m.visibleFileEntries()
-	if len(visible) == 0 {
-		b.WriteString(dimStyle.Render("(no entries)"))
-		return b.String()
-	}
-
-	for i, e := range visible {
-		marker := "  "
-		style := normalStyle
-		if i == m.fileCursor {
-			marker = "▶ "
-			style = selectedStyle
-		}
-		indent := strings.Repeat("  ", e.Depth)
-		var glyph string
-		if e.IsDir {
-			if e.Depth == 0 {
-				glyph = ""
-			} else if m.fileCollapsed[e.Path] {
-				glyph = "▸ "
-			} else {
-				glyph = "▾ "
-			}
-		}
-		name := e.Path
-		if e.IsDir {
-			// Show only the last segment for dirs.
-			if i := strings.LastIndex(name, "/"); i >= 0 {
-				name = name[i+1:]
-			} else if name == "." {
-				name = "."
-			}
-		}
-		line := fmt.Sprintf("%s%s%s%s", marker, indent, glyph, name)
-		b.WriteString(style.Render(line))
-		b.WriteByte('\n')
-	}
-	return b.String()
+	return headerStyle.Render(fmt.Sprintf("workspace — %s", m.filePicker.CurrentDirectory)) + "\n" + m.filePicker.View()
 }
 
 // renderFileContent builds the per-line rendered string for the

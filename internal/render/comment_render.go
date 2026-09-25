@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"slices"
 	"strings"
+
+	"github.com/muesli/reflow/wordwrap"
 )
 
 // footnote is one comment's footnote line, ready to be injected
@@ -121,6 +123,53 @@ func InjectGutter(rendered string, blocks []Block, focused int) string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// InjectGutterWrapped is word-wrap-aware: each rendered source
+// line is word-wrapped independently to wrapWidth, then a gutter
+// is prepended per WRAPPED line. The gutter color is derived from
+// the block that contains the source line, so all wrapped lines
+// of the same markdown source line carry the same gutter. The
+// returned int slice maps wrapped-line index → source-line index
+// so callers (the viewport owner) can translate wrapped scroll
+// positions back into source-line coordinates when matching
+// against blocks. wrapWidth <= 0 falls back to a single wrapped
+// line per source line (no actual wrap).
+func InjectGutterWrapped(rendered string, blocks []Block, focused int, wrapWidth int) (string, []int) {
+	const cyan = "\x1b[38;5;51m"
+	const yellow = "\x1b[38;5;228m"
+	const reset = "\x1b[0m"
+	sourceLines := strings.Split(rendered, "\n")
+	var b strings.Builder
+	srcIdx := make([]int, 0, len(sourceLines))
+	for i, sl := range sourceLines {
+		var wrapped string
+		if wrapWidth > 0 {
+			wrapped = wordwrap.String(sl, wrapWidth)
+		} else {
+			wrapped = sl
+		}
+		wLines := strings.Split(wrapped, "\n")
+		for _, wl := range wLines {
+			idx := CurrentBlockIdx(blocks, i)
+			switch {
+			case focused >= 0 && idx == focused:
+				b.WriteString(cyan)
+				b.WriteRune('▍')
+				b.WriteString(reset)
+			case idx >= 0 && blocks[idx].HasComment:
+				b.WriteString(yellow)
+				b.WriteRune('▍')
+				b.WriteString(reset)
+			default:
+				b.WriteByte(' ')
+			}
+			b.WriteString(wl)
+			b.WriteByte('\n')
+			srcIdx = append(srcIdx, i)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"), srcIdx
 }
 
 // injectFootnotes inserts each footnote line immediately after its

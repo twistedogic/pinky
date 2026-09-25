@@ -3,6 +3,8 @@ package render
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -117,5 +119,65 @@ func TestGutter_SmokeCheck(t *testing.T) {
 	out2 := InjectGutter(rendered, blocks, 1)
 	if !strings.Contains(out2, gutterYellowANSI+"▍"+gutterReset) {
 		t.Errorf("unfocused commented block should still show yellow gutter; got:\n%s", out2)
+	}
+}
+
+// TestInjectGutterWrapped_FocusedCarriesToWrappedLines: when a
+// source line word-wraps into multiple visual lines, EVERY wrapped
+// line must carry the focused block's cyan gutter. The wrapped
+// line index → source line index map must agree with line counts.
+func TestInjectGutterWrapped_FocusedCarriesToWrappedLines(t *testing.T) {
+	rendered := "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon"
+	blocks := []Block{{Kind: BlockParagraph, StartLine: 0, EndLine: 0, HasComment: false}}
+	out, w2s := InjectGutterWrapped(rendered, blocks, 0, 10)
+	lines := strings.Split(out, "\n")
+	if len(lines) != len(w2s) {
+		t.Fatalf("output line count %d != wrapped→source map length %d", len(lines), len(w2s))
+	}
+	// Every wrapped line of source line 0 must carry the cyan
+	// gutter (since focused=0 maps to the single block).
+	for i, line := range lines {
+		if !strings.Contains(line, gutterCyanANSI+"▍"+gutterReset) {
+			t.Errorf("wrapped line %d (source=%d) missing cyan gutter; got %q",
+				i, w2s[i], line)
+		}
+	}
+	// The map must point every wrapped line at source line 0.
+	for i, src := range w2s {
+		if src != 0 {
+			t.Errorf("wrapped line %d mapped to source %d, want 0", i, src)
+		}
+	}
+	// And the wrap actually fired: many wrapped lines for one source.
+	if len(lines) < 3 {
+		t.Errorf("expected word wrap to expand one line to many; got %d", len(lines))
+	}
+}
+
+// TestInjectGutterWrapped_YellowCarriesToWrappedLines: a commented
+// block's yellow gutter must appear on every wrapped line, even
+// though the block is unfocused.
+func TestInjectGutterWrapped_YellowCarriesToWrappedLines(t *testing.T) {
+	rendered := "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"
+	blocks := []Block{{Kind: BlockParagraph, StartLine: 0, EndLine: 0, HasComment: true}}
+	out, _ := InjectGutterWrapped(rendered, blocks, -1, 8)
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, gutterYellowANSI+"▍"+gutterReset) {
+			t.Errorf("wrapped line %d missing yellow gutter; got %q", i, line)
+		}
+	}
+}
+
+// TestInjectGutterWrapped_LineWidthWithinBudget: after wrapping
+// every visual line must fit within wrapWidth (no truncation).
+func TestInjectGutterWrapped_LineWidthWithinBudget(t *testing.T) {
+	rendered := "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor"
+	blocks := []Block{{Kind: BlockParagraph, StartLine: 0, EndLine: 0, HasComment: false}}
+	out, _ := InjectGutterWrapped(rendered, blocks, -1, 12)
+	for i, line := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(line); w > 12 {
+			t.Errorf("wrapped line %d width=%d exceeds budget=12: %q", i, w, line)
+		}
 	}
 }
