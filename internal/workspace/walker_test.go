@@ -66,7 +66,6 @@ func TestWalk_AllEntriesUnderRoot(t *testing.T) {
 		path  string
 		depth int
 	}{
-		{".", 0},
 		{"README.md", 1},
 		{"src", 1},
 		{"src/main.go", 2},
@@ -130,6 +129,31 @@ func TestWalk_NotADirectory(t *testing.T) {
 func TestWalk_MissingRoot(t *testing.T) {
 	if _, err := Walk("/no/such/dir/anywhere"); err == nil {
 		t.Error("expected error when root doesn't exist")
+	}
+}
+
+// TestWalk_NoSyntheticRoot: the walker must not emit a synthetic
+// "." entry representing root; the TUI treats fileRoot as the
+// implicit top of the tree.
+func TestWalk_NoSyntheticRoot(t *testing.T) {
+	root := fixtureTree(t)
+	got, err := Walk(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range got {
+		if e.Path == "." || e.Path == "" {
+			t.Errorf("walker must not emit root sentinel; got %+v", e)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("expected non-empty walk result")
+	}
+	// Every returned entry must have a non-zero depth.
+	for _, e := range got {
+		if e.Depth < 1 {
+			t.Errorf("entry %q has depth %d, want >=1", e.Path, e.Depth)
+		}
 	}
 }
 

@@ -53,11 +53,17 @@ func attachFileFixture(t *testing.T) *model {
 	return &m
 }
 
-// openFile moves the cursor to rel in the visible tree and presses
-// Enter, transitioning the model into stateFileView. Fails the
-// test if rel isn't visible (collapsed or missing).
+// openFile expands every collapsed dir along rel's path, then
+// moves the cursor to rel and presses Enter to transition into
+// stateFileView. Fails the test if rel isn't in the tree at all.
 func openFile(t *testing.T, m *model, rel string) {
 	t.Helper()
+	// Expand each intermediate dir so the file becomes visible.
+	dir := filepath.Dir(rel)
+	for dir != "" && dir != "." {
+		delete(m.fileCollapsed, dir)
+		dir = filepath.Dir(dir)
+	}
 	visible := m.visibleFileEntries()
 	for i, e := range visible {
 		if e.Path == rel {
@@ -111,13 +117,12 @@ func TestTab_TogglesBetweenMessageAndFiles(t *testing.T) {
 	}
 }
 
-// TestFileNav_ShowsAllEntriesUnderRoot: the tree contains every
-// entry under fileRoot (no need to navigate into subdirs to see
-// nested files). README.md, src, src/main.go, src/pkg, src/pkg/a.go
-// must all appear in the flat list.
-func TestFileNav_ShowsAllEntriesUnderRoot(t *testing.T) {
+// TestFileNav_TreeContainsAllEntries: the flat tree produced by
+// workspace.Walk contains every entry under fileRoot (collapsed
+// or not). Verifies the walker, not the collapse state.
+func TestFileNav_TreeContainsAllEntries(t *testing.T) {
 	m := attachFileFixture(t)
-	got := visiblePathList(m.visibleFileEntries())
+	got := visiblePathList(m.fileEntries)
 	for _, want := range []string{"README.md", "src", "src/main.go", "src/pkg", "src/pkg/a.go"} {
 		var found bool
 		for _, p := range got {
@@ -127,22 +132,40 @@ func TestFileNav_ShowsAllEntriesUnderRoot(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("expected %q in visible tree; got %v", want, got)
+			t.Errorf("expected %q in flat tree; got %v", want, got)
+		}
+	}
+	// And the visible list starts collapsed: only top-level
+	// entries are visible until the user presses `l`.
+	visible := visiblePathList(m.visibleFileEntries())
+	for _, p := range []string{"src/main.go", "src/pkg", "src/pkg/a.go"} {
+		for _, vp := range visible {
+			if vp == p {
+				t.Errorf("%q should be hidden initially; visible=%v", p, visible)
+			}
 		}
 	}
 }
 
-// TestFileNav_HLCollapseExpand: pressing `l` on `src` collapses
-// it (hides src/main.go and src/pkg); pressing `l` again expands
-// it back. Pressing `h` on a collapsed dir jumps to the parent.
+// TestFileNav_HLCollapseExpand: dirs start collapsed. Pressing
+// `l` on `src` expands it (src/main.go becomes visible); pressing
+// `l` again jumps to the first visible child. Pressing `h` on a
+// child entry jumps to the parent dir.
 func TestFileNav_HLCollapseExpand(t *testing.T) {
 	m := attachFileFixture(t)
 
-	// Move cursor to `src`. By default top-level dirs are
-	// expanded, so src's children are visible.
-	visible := m.visibleFileEntries()
+	// Setup: dirs start collapsed, so `src` is visible but its
+	// children are not.
+	initial := visiblePathList(m.visibleFileEntries())
+	for _, p := range initial {
+		if p == "src/main.go" || p == "src/pkg" || p == "src/pkg/a.go" {
+			t.Fatalf("setup: %q should be hidden initially (collapsed by default); got %v", p, initial)
+		}
+	}
+
+	// Move cursor to `src`.
 	srcIdx := -1
-	for i, e := range visible {
+	for i, e := range m.visibleFileEntries() {
 		if e.Path == "src" {
 			srcIdx = i
 			break
@@ -153,22 +176,9 @@ func TestFileNav_HLCollapseExpand(t *testing.T) {
 	}
 	m.fileCursor = srcIdx
 
-	// `l` on an expanded dir: collapses it (no visible child
-	// because we already moved to a sibling, not a child).
+	// `l` on collapsed `src`: expands it.
 	upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	um := upd.(model)
-	if !um.fileCollapsed["src"] {
-		t.Errorf("`l` on expanded `src` should collapse it; fileCollapsed=%v", um.fileCollapsed)
-	}
-	for _, p := range visiblePathList(um.visibleFileEntries()) {
-		if p == "src/main.go" || p == "src/pkg" || p == "src/pkg/a.go" {
-			t.Errorf("after collapse: %q should be hidden; got %v", p, visiblePathList(um.visibleFileEntries()))
-		}
-	}
-
-	// `l` again on collapsed dir: expands it.
-	upd, _ = um.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
-	um = upd.(model)
 	if um.fileCollapsed["src"] {
 		t.Errorf("`l` on collapsed `src` should expand it; fileCollapsed=%v", um.fileCollapsed)
 	}
@@ -184,20 +194,54 @@ func TestFileNav_HLCollapseExpand(t *testing.T) {
 		t.Errorf("after expand: src/main.go should be visible; got %v", gotPaths)
 	}
 
-	// Move cursor to `src/main.go`, press `h`: jumps cursor to
-	// the parent dir `src` (not collapse, since cursor is on a
-	// file with an expanded parent).
-	for i, e := range um.visibleFileEntries() {
-		if e.Path == "src/main.go" {
-			um.fileCursor = i
-			break
-		}
+	// `l` again on expanded `src`: jumps to first visible child
+	// (src/main.go). Cursor moves, src stays expanded.
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	um = upd.(model)
+	if um.fileCollapsed["src"] {
+		t.Errorf("`l` should jump to child, not collapse; fileCollapsed=%v", um.fileCollapsed)
 	}
+	cursorEntry := um.visibleFileEntries()[um.fileCursor]
+	if cursorEntry.Path != "src/main.go" {
+		t.Errorf("`l` on expanded `src` should jump cursor to first child src/main.go; got %q", cursorEntry.Path)
+	}
+
+	// `h` on src/main.go: jumps to parent dir `src` (file, so
+	// no collapse applies).
 	upd, _ = um.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	um = upd.(model)
 	parent := um.visibleFileEntries()[um.fileCursor]
 	if parent.Path != "src" {
 		t.Errorf("`h` on src/main.go should jump cursor to parent `src`; got %q", parent.Path)
+	}
+}
+
+// TestFileNav_HCollapsesExpandedDir: `h` on an expanded dir
+// collapses it without moving the cursor.
+func TestFileNav_HCollapsesExpandedDir(t *testing.T) {
+	m := attachFileFixture(t)
+	// Expand src first.
+	for i, e := range m.visibleFileEntries() {
+		if e.Path == "src" {
+			m.fileCursor = i
+			break
+		}
+	}
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	um := upd.(model)
+	if um.fileCollapsed["src"] {
+		t.Fatalf("setup: src should be expanded after l")
+	}
+	cursorBefore := um.fileCursor
+
+	// `h` on expanded dir: collapses, cursor stays.
+	upd, _ = um.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	um = upd.(model)
+	if !um.fileCollapsed["src"] {
+		t.Errorf("`h` on expanded `src` should collapse it; fileCollapsed=%v", um.fileCollapsed)
+	}
+	if um.fileCursor != cursorBefore {
+		t.Errorf("`h` should not move cursor; was %d, now %d", cursorBefore, um.fileCursor)
 	}
 }
 

@@ -25,7 +25,8 @@ type Entry struct {
 // Walk recursively walks root, returning every file and directory
 // under it. Output is pre-order (parent before children) and
 // sorted by path within each depth, so the TUI can render it as a
-// flat tree.
+// flat tree. The root itself is not emitted — its children are
+// depth 1, so the caller treats the root as the implicit top.
 func Walk(root string) ([]Entry, error) {
 	info, err := os.Lstat(root)
 	if err != nil {
@@ -34,7 +35,7 @@ func Walk(root string) ([]Entry, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace root %q is not a directory", root)
 	}
-	out := []Entry{{Path: ".", IsDir: true, Depth: 0}}
+	var out []Entry
 	if err := walkDir(root, root, 1, &out); err != nil {
 		return nil, err
 	}

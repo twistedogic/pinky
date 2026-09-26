@@ -513,15 +513,12 @@ func (m *model) enterFileNav() {
 		return
 	}
 	m.fileEntries = entries
-	if m.fileCollapsed == nil {
-		m.fileCollapsed = map[string]bool{}
-	}
-	// Top-level dirs start expanded so the user sees workspace
-	// contents without an extra keypress. Deeper dirs start
-	// collapsed to keep the visible list short.
+	m.fileCollapsed = map[string]bool{}
+	// ponytail: every dir starts collapsed. The user expands on
+	// demand with `l`; the visible list stays short for deep trees.
 	for _, e := range entries {
-		if e.IsDir && e.Depth == 1 {
-			delete(m.fileCollapsed, e.Path)
+		if e.IsDir {
+			m.fileCollapsed[e.Path] = true
 		}
 	}
 	m.fileCursor = 0
@@ -578,15 +575,7 @@ func (m *model) moveFileCursor(delta int) {
 	}
 }
 
-// findFileIndex returns the index of path in m.fileEntries, or -1.
-func (m *model) findFileIndex(path string) int {
-	for i, e := range m.fileEntries {
-		if e.Path == path {
-			return i
-		}
-	}
-	return -1
-}
+
 
 // enterCompose transitions to compose mode with the textarea reset
 // and focused. Shared by Ctrl+N and the `c` alias.
@@ -980,7 +969,8 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // fileNavCollapseOrParent implements `h`: collapse the cursor's
 // directory if expanded, otherwise jump the cursor to its parent
-// entry. No-op when the cursor is on the root.
+// directory entry. Top-level entries have no parent in the tree
+// and the call is a no-op for them.
 func (m *model) fileNavCollapseOrParent() {
 	visible := m.visibleFileEntries()
 	if m.fileCursor < 0 || m.fileCursor >= len(visible) {
@@ -991,31 +981,22 @@ func (m *model) fileNavCollapseOrParent() {
 		m.fileCollapsed[entry.Path] = true
 		return
 	}
-	// Jump to parent: the closest ancestor with a strictly lower
-	// depth whose path is a prefix of entry.Path.
-	parentDepth := entry.Depth - 1
-	for parentDepth >= 0 {
-		for i, e := range m.fileEntries {
-			if e.IsDir && e.Depth == parentDepth && (parentDepth == 0 ||
-				filepath.HasPrefix(entry.Path, e.Path+"/")) {
-				// Find this entry's position in visible.
-				for vi, ve := range visible {
-					if ve.Path == e.Path {
-						m.fileCursor = vi
-						return
-					}
-				}
-				_ = i
-				break
-			}
+	parent := filepath.Dir(entry.Path)
+	if parent == "" || parent == "." || parent == "/" {
+		return
+	}
+	for vi, ve := range visible {
+		if ve.Path == parent {
+			m.fileCursor = vi
+			return
 		}
-		parentDepth--
 	}
 }
 
 // fileNavExpandOrChild implements `l`: expand the cursor's
-// directory if collapsed, otherwise jump to the first visible
-// child entry. No-op on files.
+// directory if collapsed, otherwise move the cursor to the next
+// visible entry (a child of the current dir). No-op on files
+// or empty dirs.
 func (m *model) fileNavExpandOrChild() {
 	visible := m.visibleFileEntries()
 	if m.fileCursor < 0 || m.fileCursor >= len(visible) {
@@ -1029,28 +1010,14 @@ func (m *model) fileNavExpandOrChild() {
 		delete(m.fileCollapsed, entry.Path)
 		return
 	}
-	// Jump to first visible child: the next entry in the flat
-	// list whose depth is entry.Depth + 1 and whose path is a
-	// child of entry.Path. If there's no such entry (empty dir
-	// or all children hidden), collapse the dir so the user gets
-	// immediate feedback.
-	idx := m.findFileIndex(entry.Path)
-	if idx < 0 {
-		return
-	}
-	for j := idx + 1; j < len(m.fileEntries); j++ {
-		c := m.fileEntries[j]
-		if c.Depth <= entry.Depth {
-			break
-		}
-		if c.Depth == entry.Depth+1 {
-			m.fileCollapsed[entry.Path] = true
-			return
+	// Move cursor to the next visible entry if it's strictly
+	// deeper than the current dir (i.e., a visible child).
+	if m.fileCursor+1 < len(visible) {
+		next := visible[m.fileCursor+1]
+		if next.Depth > entry.Depth {
+			m.fileCursor++
 		}
 	}
-	// No visible child: collapse the dir so the user sees the
-	// action took effect.
-	m.fileCollapsed[entry.Path] = true
 }
 
 // fileLineCount returns the number of source lines in path, or 1
@@ -1762,7 +1729,7 @@ func (m model) fileNavView() string {
 		return b.String()
 	}
 	for i, e := range visible {
-		indent := strings.Repeat("  ", e.Depth)
+		indent := strings.Repeat("  ", e.Depth-1)
 		marker := " "
 		if e.IsDir {
 			if m.fileCollapsed[e.Path] {
@@ -1772,11 +1739,6 @@ func (m model) fileNavView() string {
 			}
 		}
 		name := filepath.Base(e.Path)
-		if e.Path == "." {
-			name = "."
-			indent = ""
-			marker = "▾"
-		}
 		line := fmt.Sprintf("%s%s %s", indent, marker, name)
 		if i == m.fileCursor {
 			b.WriteString(selectedStyle.Render("▶ " + line))
