@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1907,7 +1908,7 @@ func (m model) renderFileContent() string {
 	}
 	const green = "\x1b[38;5;42m"
 	const yellow = "\x1b[38;5;228m"
-	width := len(fmt.Sprintf("%d", len(m.fileViewer.lines)))
+	width := len(strconv.Itoa(len(m.fileViewer.lines)))
 	var b strings.Builder
 	for i, content := range m.fileViewer.lines {
 		ln := i + 1

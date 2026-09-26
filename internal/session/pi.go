@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -81,7 +82,7 @@ func openPiByCwd(cwd string) (string, error) {
 // piSessionFile finds an open .jsonl session file for pid by parsing
 // `lsof` output. Picks the most recently modified match.
 func piSessionFile(pid int) (string, error) {
-	cmd := exec.Command("lsof", "-p", fmt.Sprintf("%d", pid), "-a", "-F", "n")
+	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid), "-a", "-F", "n")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("lsof failed (is lsof installed?): %w", err)

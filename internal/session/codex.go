@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,7 +48,7 @@ func openCodex(pid int, cwd string) (*codexSource, error) {
 // Uses `lsof` to enumerate open files and picks the one under the codex
 // sessions root that ends in .jsonl. Used as a last-resort fallback.
 func codexSessionFile(pid int) (string, error) {
-	cmd := exec.Command("lsof", "-p", fmt.Sprintf("%d", pid), "-a", "-F", "n")
+	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid), "-a", "-F", "n")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("lsof failed (is lsof installed?): %w\n\n"+
