@@ -1751,24 +1751,32 @@ func (m model) fileNavView() string {
 }
 
 // renderFileContent builds the per-line rendered string for the
-// file viewer: right-aligned line numbers, a yellow `▍` gutter on
-// commented lines, and an inline cyan highlight of the visual
-// selection. No header — the header (with optional position
-// indicator) lives in fileViewView, outside the viewport so it
-// stays visible while the body scrolls.
+// file viewer: a green `▍` selector gutter on the cursor's line
+// (highest priority), a yellow `▍` gutter on commented lines, a
+// space otherwise, right-aligned line numbers, and an inline cyan
+// highlight of the visual selection. Three colours stay distinct
+// so tests can pin each one independently. The whole string is fed
+// to m.fileViewer.viewport so the cursor's gutter scrolls with the
+// content via the existing scrollFileCursorIntoView call.
 func (m model) renderFileContent() string {
 	if len(m.fileViewer.lines) == 0 {
 		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 		return dimStyle.Render("(empty file)")
 	}
+	const green = "\x1b[38;5;42m"
 	const yellow = "\x1b[38;5;228m"
 	width := len(fmt.Sprintf("%d", len(m.fileViewer.lines)))
 	var b strings.Builder
 	for i, content := range m.fileViewer.lines {
 		ln := i + 1
-		gutter := " "
-		if i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment {
+		var gutter string
+		switch {
+		case ln == m.fileViewer.cursor:
+			gutter = green + "▍" + resetANSI
+		case i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment:
 			gutter = yellow + "▍" + resetANSI
+		default:
+			gutter = " "
 		}
 		fmt.Fprintf(&b, "%s %*d  %s\n", gutter, width, ln, applySelection(content, ln, m.fileViewer.visual))
 	}

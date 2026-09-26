@@ -652,3 +652,42 @@ func TestFileView_NewCommentShowsYellowGutter(t *testing.T) {
 		t.Errorf("expected yellow ▍ gutter in viewport after saving comment; got:\n%s", view)
 	}
 }
+
+// TestFileView_CursorGutterFollowsCursor: every refresh paints a
+// green ▍ selector gutter on the cursor's line. Moving the cursor
+// moves the gutter.
+func TestFileView_CursorGutterFollowsCursor(t *testing.T) {
+	const green = "\x1b[38;5;42m"
+	m := *attachFileFixture(t)
+	openFile(t, &m, "src/main.go")
+	if m.fileViewer.cursor != 1 {
+		t.Fatalf("setup: cursor should start at 1; got %d", m.fileViewer.cursor)
+	}
+	view := m.fileViewer.viewport.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], green+"▍") {
+		t.Errorf("expected green ▍ selector gutter at start of viewport; got first 80 chars:\n%q",
+			view[:min(80, len(view))])
+	}
+
+	// Move cursor down; the gutter must move with it.
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = upd.(model)
+	if m.fileViewer.cursor != 2 {
+		t.Fatalf("after j: cursor should be 2; got %d", m.fileViewer.cursor)
+	}
+	view = m.fileViewer.viewport.View()
+	lines = strings.Split(view, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("viewport too short to test line 2; got %d lines", len(lines))
+	}
+	// Line 1 no longer has the gutter, line 2 does.
+	if strings.HasPrefix(lines[0], green+"▍") {
+		t.Errorf("after j: line 1 should no longer have gutter; got first 60 chars:\n%q",
+			lines[0][:min(60, len(lines[0]))])
+	}
+	if !strings.HasPrefix(lines[1], green+"▍") {
+		t.Errorf("after j: line 2 should have green ▍ gutter; got first 60 chars:\n%q",
+			lines[1][:min(60, len(lines[1]))])
+	}
+}
