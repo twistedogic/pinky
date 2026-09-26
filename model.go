@@ -996,6 +996,8 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			filePath:  entry.Path,
 			lineStart: 1,
 			lineEnd:   m.fileLineCount(entry.Path),
+			charA:     -1,
+			charC:     -1,
 		}
 		m.enterCommentComposer(m.commentAnchor)
 		return m, nil
@@ -1405,14 +1407,20 @@ func (m *model) openFileComment() {
 	a := commentAnchor{
 		kind:     render.CommentFile,
 		filePath: fv.path,
+		// Default to line-range (no inline bytes). Without these
+		// the zero value (0) would falsely register as an inline
+		// byte-0 selection, producing a `file-inline ""` comment.
+		charA: -1,
+		charC: -1,
 	}
 	if fv.visual.Active {
 		a.lineStart, a.lineEnd = fv.visual.LineA, fv.visual.LineC
 		if a.lineStart > a.lineEnd {
 			a.lineStart, a.lineEnd = a.lineEnd, a.lineStart
 		}
-		// Snap char endpoints if they look un-snapped (visual just
-		// toggled without movement). Treat as whole-line range.
+		// Inline only when visual picks a non-empty byte range on
+		// a single line. Multi-line visual, or single-line with
+		// CharA == CharC, stays line-range.
 		if a.lineStart == a.lineEnd && fv.visual.CharA != fv.visual.CharC {
 			a.charA = fv.visual.CharA
 			a.charC = fv.visual.CharC
@@ -1456,7 +1464,10 @@ func buildCommentAnchor(st *render.NavState, cur *render.NavCursor, sel *render.
 // handleNavKey and (via the same ActionSend) from handleComposeKey.
 func (m *model) handleSend() {
 	switch m.state {
-	case stateNav:
+	case stateNav, stateFileNav, stateFileView:
+		// ponytail: `s` flushes accumulated comments from any
+		// file-review state too — the user can stage comments
+		// across file views without bouncing back to the message.
 		m.submitAllComments()
 	case stateCompose:
 		text := m.textarea.Value()

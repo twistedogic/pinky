@@ -901,3 +901,99 @@ func TestFileNav_SearchArrowKeysNavigate(t *testing.T) {
 		t.Errorf("Down arrow should not modify query; got %q", string(m.fileSearch))
 	}
 }
+
+// TestFileView_WholeFileCommentUsesLineRange: pressing `c` in
+// stateFileView without visual mode (whole-file anchor) must
+// produce a `file` (not `file-inline`) comment with char range
+// -1, not a degenerate inline byte-0 selection that yields an
+// empty excerpt.
+func TestFileView_WholeFileCommentUsesLineRange(t *testing.T) {
+	m := *attachFileFixture(t)
+	openFile(t, &m, "src/main.go")
+
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = upd.(model)
+	if m.state != stateCommentComposer {
+		t.Fatalf("after c: expected stateCommentComposer; got %v", m.state)
+	}
+	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+		t.Errorf("whole-file anchor should have charA=charC=-1 (line range); got (%d,%d)",
+			m.commentAnchor.charA, m.commentAnchor.charC)
+	}
+
+	m.commentTa.SetValue("rename alpha")
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = upd.(model)
+	c0 := m.comments[0]
+	if c0.CharStart != -1 || c0.CharEnd != -1 {
+		t.Errorf("saved whole-file comment should have CharStart=CharEnd=-1; got (%d,%d)",
+			c0.CharStart, c0.CharEnd)
+	}
+	if c0.Source != "" {
+		t.Errorf("saved whole-file comment should have empty Source; got %q", c0.Source)
+	}
+
+	// Flush and verify the appendix uses the `file` marker, not
+	// `file-inline ""`.
+	prev := sendToPane
+	var sent string
+	sendToPane = func(_, text string) error { sent = text; return nil }
+	t.Cleanup(func() { sendToPane = prev })
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	m = upd.(model)
+	if !strings.Contains(sent, "- file ") || strings.Contains(sent, "file-inline") {
+		t.Errorf("appendix should use `file` marker, not `file-inline`; payload:\n%s", sent)
+	}
+	if strings.Contains(sent, `""`) {
+		t.Errorf("appendix should not contain an empty excerpt; payload:\n%s", sent)
+	}
+}
+
+// TestFileNav_WholeFileCommentUsesLineRange: pressing `c` on a
+// file in the dir navigator (stateFileNav) must produce a line-
+// range file-kind comment, same as the file-viewer's whole-file
+// path. Pre-fix this also yielded `file-inline ""`.
+func TestFileNav_WholeFileCommentUsesLineRange(t *testing.T) {
+	m := *attachFileFixture(t)
+	// Move cursor onto src/main.go.
+	visible := m.visibleFileEntries()
+	for i, e := range visible {
+		if e.Path == "src/main.go" {
+			m.fileCursor = i
+			break
+		}
+	}
+
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = upd.(model)
+	if m.state != stateCommentComposer {
+		t.Fatalf("after c: expected stateCommentComposer; got %v", m.state)
+	}
+	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+		t.Errorf("file-nav whole-file anchor should have charA=charC=-1; got (%d,%d)",
+			m.commentAnchor.charA, m.commentAnchor.charC)
+	}
+}
+
+// TestFileView_VisualMultiLineStaysLineRange: pressing `v` then
+// `j` `k` (multi-line visual) then `c` must produce a line-range
+// file comment, not a degenerate inline selection.
+func TestFileView_VisualMultiLineStaysLineRange(t *testing.T) {
+	m := *attachFileFixture(t)
+	openFile(t, &m, "src/main.go")
+
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m = upd.(model)
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = upd.(model)
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = upd.(model)
+	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+		t.Errorf("multi-line visual should stay line-range; got charA=%d charC=%d",
+			m.commentAnchor.charA, m.commentAnchor.charC)
+	}
+	if m.commentAnchor.lineStart != 1 || m.commentAnchor.lineEnd != 2 {
+		t.Errorf("multi-line visual (line 1 + j to 2) should give 1..2; got %d..%d",
+			m.commentAnchor.lineStart, m.commentAnchor.lineEnd)
+	}
+}
