@@ -175,7 +175,7 @@ func TestSessionMsg_SameMsgKeepsComments(t *testing.T) {
 func longMsg() string {
 	var b strings.Builder
 	b.WriteString("# Title\n\n```\n")
-	for i := 0; i < 60; i++ {
+	for range 60 {
 		b.WriteString("line\n")
 	}
 	b.WriteString("```")

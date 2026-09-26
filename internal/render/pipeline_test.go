@@ -55,7 +55,7 @@ func TestPipeline_EmptyMessage(t *testing.T) {
 func TestPipeline_BlockBoundariesNonOverlapping(t *testing.T) {
 	md := "# A\n\npara one\n\n## B\n\npara two\n\n- one\n- two\n- three\n"
 	_, blocks := renderBlocks(md)
-	for i := 0; i < len(blocks)-1; i++ {
+	for i := range len(blocks) - 1 {
 		if blocks[i].EndLine >= blocks[i+1].StartLine {
 			t.Errorf("block %d (lines %d-%d) overlaps block %d (lines %d-%d)",
 				i, blocks[i].StartLine, blocks[i].EndLine,

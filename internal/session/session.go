@@ -275,8 +275,8 @@ func readEnvs(pid int) (map[string]string, error) {
 	// On macOS, ps output has COMMAND then env vars space-separated at the end.
 	envs := map[string]string{}
 	for _, kv := range strings.Fields(tail) {
-		if i := strings.IndexByte(kv, '='); i > 0 {
-			envs[kv[:i]] = kv[i+1:]
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			envs[k] = v
 		}
 	}
 	return envs, nil
@@ -295,8 +295,8 @@ func readPIDEnvs(pid int) map[string]string {
 	}
 	envs := map[string]string{}
 	for _, kv := range bytes.Split(data, []byte{0}) {
-		if i := bytes.IndexByte(kv, '='); i > 0 {
-			envs[string(kv[:i])] = string(kv[i+1:])
+		if k, v, ok := bytes.Cut(kv, []byte("=")); ok && len(k) > 0 {
+			envs[string(k)] = string(v)
 		}
 	}
 	return envs

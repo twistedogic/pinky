@@ -335,7 +335,7 @@ func TestFileView_CommentInlineCharRange(t *testing.T) {
 
 	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	um := upd.(model)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		upd, _ = um.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 		um = upd.(model)
 	}
@@ -513,7 +513,7 @@ func TestFileView_JScrollsViewport(t *testing.T) {
 	root, rel := longFileFixture(t, 100)
 	m := openFileInFixture(t, root, rel)
 	start := m.fileViewer.viewport.YOffset()
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 		mv := updated.(model)
 		m = &mv

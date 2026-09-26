@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1117,11 +1118,10 @@ func (m *model) fileNavCollapseOrParent() {
 	if parent == "" || parent == "." || parent == "/" {
 		return
 	}
-	for vi, ve := range visible {
-		if ve.Path == parent {
-			m.fileCursor = vi
-			return
-		}
+	if vi := slices.IndexFunc(visible, func(e workspace.Entry) bool {
+		return e.Path == parent
+	}); vi >= 0 {
+		m.fileCursor = vi
 	}
 }
 
@@ -1550,14 +1550,9 @@ func (m *model) helpHeight() int {
 	}
 	maxN := 0
 	for _, g := range m.FullHelp() {
-		if len(g) > maxN {
-			maxN = len(g)
-		}
+		maxN = max(maxN, len(g))
 	}
-	if maxN < 1 {
-		return 1
-	}
-	return maxN
+	return max(maxN, 1)
 }
 
 // ShortHelp returns the keybindings rendered in the one-line help

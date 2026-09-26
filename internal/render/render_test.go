@@ -70,7 +70,7 @@ para one
 
 para two`
 	_, blocks := renderBlocks(md)
-	for i := 0; i < len(blocks)-1; i++ {
+	for i := range len(blocks) - 1 {
 		if blocks[i].EndLine+1 != blocks[i+1].StartLine {
 			t.Errorf("blocks[%d] ends at %d, blocks[%d] starts at %d (not contiguous)",
 				i, blocks[i].EndLine, i+1, blocks[i+1].StartLine)
@@ -241,7 +241,7 @@ trailing paragraph
 			t.Errorf("block %d Kind = %s want %s", i, k, wantKinds[i])
 		}
 	}
-	for i := 0; i < len(blocks)-1; i++ {
+	for i := range len(blocks) - 1 {
 		if blocks[i].EndLine+1 != blocks[i+1].StartLine {
 			t.Errorf("blocks[%d] ends at %d, blocks[%d] starts at %d (not contiguous)",
 				i, blocks[i].EndLine, i+1, blocks[i+1].StartLine)

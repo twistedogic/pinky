@@ -71,7 +71,7 @@ func TestNav_HLClampAtByteBoundaries(t *testing.T) {
 		t.Errorf("CharPos after l from 0 = %d want 1", cur.CharPos)
 	}
 	// "bravo charlie" is 13 bytes
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		NavHandle('l', &st, &cur, &sel, blocks)
 	}
 	if cur.CharPos != 13 {
@@ -81,7 +81,7 @@ func TestNav_HLClampAtByteBoundaries(t *testing.T) {
 	if cur.CharPos != 12 {
 		t.Errorf("CharPos after h from 13 = %d want 12", cur.CharPos)
 	}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		NavHandle('h', &st, &cur, &sel, blocks)
 	}
 	if cur.CharPos != 0 {

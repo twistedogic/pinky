@@ -20,7 +20,7 @@ func TestFileView_ResizeKeepsCursorVisible(t *testing.T) {
 			mv := upd.(model)
 			m = &mv
 
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				upd, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 				mv = upd.(model)
 				m = &mv
@@ -45,7 +45,7 @@ func TestFileView_ResizeKeepsCursorVisible(t *testing.T) {
 		mv := upd.(model)
 		m = &mv
 
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			upd, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 			mv = upd.(model)
 			m = &mv
