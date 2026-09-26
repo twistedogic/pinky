@@ -18,28 +18,7 @@ type footnote struct {
 	excerpt string
 }
 
-// VisibleWidth counts non-ANSI runes in s. Used for status-bar
-// padding so the rendered bar fills the terminal even when its bg
-// style would otherwise break lipgloss.Width. Exported because the
-// model package needs to apply the same padding.
-func VisibleWidth(s string) int {
-	n := 0
-	inEscape := false
-	for _, r := range s {
-		if r == 0x1b {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		n++
-	}
-	return n
-}
+
 
 // RenderMessageWithComments renders md and overlays comment annotations
 // on top of the result: a footnote line below each commented block

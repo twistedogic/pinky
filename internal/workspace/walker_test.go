@@ -181,19 +181,3 @@ func TestWalk_TopLevelSorted(t *testing.T) {
 	}
 }
 
-func TestDepthOf(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want int
-	}{
-		{".", 0},
-		{"", 0},
-		{"foo", 1},
-		{"foo/bar", 2},
-		{"a/b/c/d", 4},
-	} {
-		if got := DepthOf(tc.in); got != tc.want {
-			t.Errorf("DepthOf(%q) = %d, want %d", tc.in, got, tc.want)
-		}
-	}
-}

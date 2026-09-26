@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"charm.land/bubbles/v2/viewport"
+	"github.com/charmbracelet/x/ansi"
 
-	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
 )
 
@@ -21,7 +21,7 @@ func TestView_PadsPickerToFullWidth(t *testing.T) {
 
 	view := m.View()
 	for _, line := range strings.Split(view.Content, "\n") {
-		if w := render.VisibleWidth(line); w != m.width {
+		if w := ansi.StringWidth(line); w != m.width {
 			t.Errorf("line width = %d want %d\n  line: %q", w, m.width, line)
 		}
 	}
@@ -38,7 +38,7 @@ func TestView_PadsStatusLineToFullWidth(t *testing.T) {
 	view := m.View()
 	lines := strings.Split(view.Content, "\n")
 	last := lines[len(lines)-1]
-	if w := render.VisibleWidth(last); w != m.width {
+	if w := ansi.StringWidth(last); w != m.width {
 		t.Errorf("status line width = %d want %d\n  line: %q", w, m.width, last)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/twistedogic/pinky/internal/history"
 	"github.com/twistedogic/pinky/internal/inject"
@@ -869,8 +870,7 @@ func (m *model) refreshFileViewer() {
 	if m.fileViewer.path == "" {
 		return
 	}
-	_, idx := render.RenderFile(m.fileViewer.content, m.fileCommentsFor(m.fileViewer.path))
-	m.fileViewer.lineIndex = idx
+	m.fileViewer.lineIndex = render.MarkLines(m.fileViewer.content, m.fileCommentsFor(m.fileViewer.path))
 }
 
 func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1034,7 +1034,8 @@ func (m *model) enterFileSearch() {
 // regular tree).
 func (m model) handleFileNavSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if isEsc(msg) {
-		m.cancelFileSearch()
+		m.fileSearchActive = false
+		m.fileSearch = nil
 		return m, nil
 	}
 	kp, ok := msg.(tea.KeyPressMsg)
@@ -1045,7 +1046,8 @@ func (m model) handleFileNavSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		visible := m.visibleFileEntries()
 		if m.fileCursor < 0 || m.fileCursor >= len(visible) {
-			m.cancelFileSearch()
+			m.fileSearchActive = false
+			m.fileSearch = nil
 			return m, nil
 		}
 		entry := visible[m.fileCursor]
@@ -1078,13 +1080,6 @@ func (m model) handleFileNavSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
-}
-
-// cancelFileSearch turns off the filter; the cursor is left where
-// it is in the (now unfiltered) tree.
-func (m *model) cancelFileSearch() {
-	m.fileSearchActive = false
-	m.fileSearch = nil
 }
 
 // clampFileCursorAfterFilter ensures the cursor stays within the
@@ -1186,7 +1181,7 @@ func (m *model) openFileViewer(path string) {
 		return
 	}
 	content := string(data)
-	_, idx := render.RenderFile(content, m.fileCommentsFor(path))
+	m.fileViewer.lineIndex = render.MarkLines(content, m.fileCommentsFor(path))
 	w, h := m.viewportSize()
 	h-- // ponytail: one line for the file-viewer header above the viewport.
 	if h < 1 {
@@ -1198,7 +1193,7 @@ func (m *model) openFileViewer(path string) {
 		lines:     strings.Split(strings.TrimRight(content, "\n"), "\n"),
 		cursor:    1,
 		visual:    fileSelection{LineA: 1, CharA: 0, LineC: 1, CharC: 0},
-		lineIndex: idx,
+		lineIndex: render.MarkLines(content, m.fileCommentsFor(path)),
 		viewport:  viewport.New(viewport.WithWidth(w), viewport.WithHeight(h)),
 	}
 	m.state = stateFileView
@@ -1438,7 +1433,10 @@ func (m *model) openFileComment() {
 
 // buildCommentAnchor assembles the (block, charA, charC) for the next
 // comment. With an active selection, anchor is the selection range;
-// otherwise anchor covers the whole block at the cursor.
+// otherwise anchor covers the whole block at the cursor. The
+// no-visual branch uses charA=charC=-1 to signal whole-block (not
+// inline byte-0) so the appendix emits marker=`block`, not
+// marker=`inline`.
 func buildCommentAnchor(st *render.NavState, cur *render.NavCursor, sel *render.NavSelection, blocks []render.Block) commentAnchor {
 	if st.Visual == render.NavLine {
 		idx := sel.BlockIdx
@@ -1455,7 +1453,7 @@ func buildCommentAnchor(st *render.NavState, cur *render.NavCursor, sel *render.
 	if idx < 0 || idx >= len(blocks) {
 		return commentAnchor{blockIdx: -1, charA: -1, charC: -1}
 	}
-	return commentAnchor{blockIdx: idx, charA: 0, charC: len(blocks[idx].Source)}
+	return commentAnchor{blockIdx: idx, charA: -1, charC: -1}
 }
 
 // handleSend is the universal `s` dispatch. In nav it batch-sends
@@ -1831,7 +1829,7 @@ func padRight(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	pad := width - render.VisibleWidth(s)
+	pad := width - ansi.StringWidth(s)
 	if pad <= 0 {
 		return s
 	}

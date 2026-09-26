@@ -42,8 +42,9 @@ func TestNavKey_C_NoSelectionOpensBlockComposer(t *testing.T) {
 	if got.commentAnchor.blockIdx < 0 {
 		t.Errorf("expected commentAnchor.blockIdx >= 0; got %d", got.commentAnchor.blockIdx)
 	}
-	if got.commentAnchor.charA != 0 {
-		t.Errorf("block-level anchor should start at 0; got %d", got.commentAnchor.charA)
+	if got.commentAnchor.charA != -1 || got.commentAnchor.charC != -1 {
+		t.Errorf("block-level anchor should have charA=charC=-1; got (%d,%d)",
+			got.commentAnchor.charA, got.commentAnchor.charC)
 	}
 }
 
@@ -423,5 +424,40 @@ func TestCompose_I_TogglesIncludeComments(t *testing.T) {
 	m = updated.(model)
 	if m.includeComments {
 		t.Errorf("includeComments = true want false after second `i`")
+	}
+}
+
+// TestNavKey_BlockKindWholeBlockUsesBlockMarker: pressing `c` in
+// stateNav (no visual selection) produces a whole-block comment
+// that flushes with marker=`block`, not marker=`inline`. Same
+// root-cause shape as the file-inline "" bug — the commentAnchor
+// was defaulting charA to 0, falsely registering as inline byte-0.
+func TestNavKey_BlockKindWholeBlockUsesBlockMarker(t *testing.T) {
+	m := newIdleModelForKeymap(t)
+	m.state = stateNav
+	m.latest = session.Message{Role: session.RoleAssistant, Text: "alpha block"}
+	m.refreshViewport()
+	initCommentTAForTest(&m)
+
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = upd.(model)
+	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+		t.Fatalf("whole-block anchor should have charA=charC=-1; got (%d,%d)",
+			m.commentAnchor.charA, m.commentAnchor.charC)
+	}
+
+	m.commentTa.SetValue("block note")
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = upd.(model)
+
+	prev := sendToPane
+	var sent string
+	sendToPane = func(_, text string) error { sent = text; return nil }
+	t.Cleanup(func() { sendToPane = prev })
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	m = upd.(model)
+
+	if !strings.Contains(sent, "- block ") || strings.Contains(sent, "inline") {
+		t.Errorf("appendix should use `block` marker for whole-block; payload:\n%s", sent)
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Entry is one file or directory under the workspace root.
@@ -74,14 +73,4 @@ func walkDir(root, dir string, depth int, out *[]Entry) error {
 		}
 	}
 	return nil
-}
-
-// DepthOf returns the depth of a slash-separated path: 1 for
-// "foo", 2 for "foo/bar", etc. Used by tests and by the TUI when
-// computing the indent for a path that came from outside Walk.
-func DepthOf(path string) int {
-	if path == "" || path == "." {
-		return 0
-	}
-	return strings.Count(path, "/") + 1
 }

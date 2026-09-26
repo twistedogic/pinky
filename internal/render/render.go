@@ -74,7 +74,7 @@ func renderBlocks(md string) (string, []Block) {
 				continue
 			}
 			rendered := ext.source + "\n"
-			count := lineCount(rendered)
+			count := strings.Count(rendered, "\n")
 			if count == 0 {
 				continue
 			}
@@ -190,13 +190,6 @@ func byteRange(node ast.Node, src []byte) (start, end int) {
 		end = start
 	}
 	return start, end
-}
-
-func lineCount(s string) int {
-	if s == "" {
-		return 0
-	}
-	return strings.Count(s, "\n")
 }
 
 // CommentKind discriminates which fields of Comment carry the
