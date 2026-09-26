@@ -1634,8 +1634,16 @@ func (m model) View() tea.View {
 			m.statusLine(),
 		))
 	case stateCommentComposer:
+		// Render the viewport the user came from so a file-kind
+		// comment composer overlays the file viewer (not the
+		// message viewport, which would look like the user got
+		// teleported to the last message).
+		body := m.viewport.View()
+		if m.commentAnchor.kind == render.CommentFile && m.fileViewer.path != "" {
+			body = m.fileViewView()
+		}
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
-			m.viewport.View(),
+			body,
 			m.commentTa.View(),
 			helpView,
 			m.statusLine(),

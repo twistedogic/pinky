@@ -691,3 +691,34 @@ func TestFileView_CursorGutterFollowsCursor(t *testing.T) {
 			lines[1][:min(60, len(lines[1]))])
 	}
 }
+
+// TestFileView_ComposerKeepsFileContext: pressing `c` in the file
+// viewer must NOT swap the viewport out from under the user. The
+// comment composer overlays the file viewer, not the message
+// viewport — otherwise pressing `c` feels like teleporting back to
+// the last agent message.
+func TestFileView_ComposerKeepsFileContext(t *testing.T) {
+	m := *attachFileFixture(t)
+	m.width = 80
+	m.height = 24
+	openFile(t, &m, "src/main.go")
+	if m.state != stateFileView {
+		t.Fatalf("setup: expected stateFileView, got %v", m.state)
+	}
+
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = upd.(model)
+	if m.state != stateCommentComposer {
+		t.Fatalf("after c: expected stateCommentComposer; got %v", m.state)
+	}
+	if m.commentAnchor.kind != 1 { // render.CommentFile
+		t.Fatalf("after c: anchor kind should be CommentFile; got %v", m.commentAnchor.kind)
+	}
+
+	view := m.View()
+	plain := stripANSI(view.Content)
+	if !strings.Contains(plain, "alpha") {
+		t.Errorf("file content should remain visible during file-kind composer; got:\n%q",
+			plain)
+	}
+}
