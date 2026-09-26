@@ -722,3 +722,182 @@ func TestFileView_ComposerKeepsFileContext(t *testing.T) {
 			plain)
 	}
 }
+
+// TestFileNav_SearchActivatesAndFilters: pressing `/` activates
+// fuzzy search; typing characters filters visible entries by
+// subsequence match against the path. Collapsed dirs are
+// overridden during search so a hidden nested file becomes visible.
+func TestFileNav_SearchActivatesAndFilters(t *testing.T) {
+	m := *attachFileFixture(t)
+	m.width = 80
+	m.height = 24
+
+	// Activate search.
+	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = upd.(model)
+	if !m.fileSearchActive {
+		t.Fatalf("after /: expected fileSearchActive=true; got false")
+	}
+
+	// Type "pkg" — should match src/pkg and src/pkg/a.go (both have "pkg" in path).
+	for _, r := range "pkg" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	visible := m.visibleFileEntries()
+	wantPaths := map[string]bool{"src/pkg": true, "src/pkg/a.go": true}
+	if len(visible) != len(wantPaths) {
+		t.Fatalf("after typing pkg: expected %d matches; got %d (%v)",
+			len(wantPaths), len(visible), visiblePathList(visible))
+	}
+	for _, e := range visible {
+		if !wantPaths[e.Path] {
+			t.Errorf("unexpected match %q", e.Path)
+		}
+	}
+
+	// src/pkg/a.go is hidden in the unfiltered tree (src is
+	// collapsed); search must surface it anyway.
+	var sawAgo bool
+	for _, e := range visible {
+		if e.Path == "src/pkg/a.go" {
+			sawAgo = true
+		}
+	}
+	if !sawAgo {
+		t.Errorf("search should surface hidden nested files (src/pkg/a.go); got %v",
+			visiblePathList(visible))
+	}
+}
+
+// TestFileNav_SearchFuzzySubsequence: fuzzy matching is
+// subsequence (chars in order), case-insensitive. "mig" matches
+// "src/main.go" (m, i, g all present in order) but not "src/pkg".
+func TestFileNav_SearchFuzzySubsequence(t *testing.T) {
+	m := *attachFileFixture(t)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = upd.(model)
+	for _, r := range "MIG" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	visible := m.visibleFileEntries()
+	if len(visible) != 1 {
+		t.Fatalf("expected 1 match for 'MIG'; got %d (%v)", len(visible), visiblePathList(visible))
+	}
+	if visible[0].Path != "src/main.go" {
+		t.Errorf("expected src/main.go; got %q", visible[0].Path)
+	}
+
+	// "xyz" matches nothing.
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = upd.(model)
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = upd.(model)
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = upd.(model)
+	for _, r := range "xyz" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	if v := m.visibleFileEntries(); len(v) != 0 {
+		t.Errorf("expected 0 matches for 'xyz'; got %v", visiblePathList(v))
+	}
+}
+
+// TestFileNav_SearchBackspace: backspace trims the query and
+// the visible list grows back.
+func TestFileNav_SearchBackspace(t *testing.T) {
+	m := *attachFileFixture(t)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = upd.(model)
+	for _, r := range "pkg" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = upd.(model)
+	if string(m.fileSearch) != "pk" {
+		t.Errorf("after backspace: query=%q want %q", string(m.fileSearch), "pk")
+	}
+	visible := m.visibleFileEntries()
+	// "pk" matches src/pkg (p,k) and src/pkg/a.go (p,k), and README.md (none).
+	if len(visible) != 2 {
+		t.Errorf("expected 2 matches for 'pk'; got %d (%v)", len(visible), visiblePathList(visible))
+	}
+}
+
+// TestFileNav_SearchEscCancels: Esc turns off search and keeps
+// the user's view (the search input disappears, no filter applied).
+func TestFileNav_SearchEscCancels(t *testing.T) {
+	m := *attachFileFixture(t)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = upd.(model)
+	for _, r := range "pkg" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = upd.(model)
+	if m.fileSearchActive {
+		t.Errorf("after Esc: fileSearchActive should be false")
+	}
+	if len(m.fileSearch) != 0 {
+		t.Errorf("after Esc: query should be empty; got %q", string(m.fileSearch))
+	}
+	// Unfiltered tree (collapse restored): only README.md + src visible.
+	visible := m.visibleFileEntries()
+	if len(visible) != 2 {
+		t.Errorf("after Esc: expected unfiltered visible; got %v", visiblePathList(visible))
+	}
+}
+
+// TestFileNav_SearchEnterOpensFile: pressing Enter on a matched
+// file opens the viewer; search is exited.
+func TestFileNav_SearchEnterOpensFile(t *testing.T) {
+	m := *attachFileFixture(t)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = upd.(model)
+	for _, r := range "main" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = upd.(model)
+	if m.state != stateFileView {
+		t.Errorf("after Enter in search: expected stateFileView; got %v", m.state)
+	}
+	if m.fileViewer.path != "src/main.go" {
+		t.Errorf("expected viewer path 'src/main.go'; got %q", m.fileViewer.path)
+	}
+	if m.fileSearchActive {
+		t.Errorf("after Enter: search should be exited")
+	}
+}
+
+// TestFileNav_SearchArrowKeysNavigate: in search mode, j/k are
+// typed into the query (muscle memory gives way); Up/Down arrows
+// navigate the filtered list.
+func TestFileNav_SearchArrowKeysNavigate(t *testing.T) {
+	m := *attachFileFixture(t)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = upd.(model)
+	for _, r := range "src" {
+		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = upd.(model)
+	}
+	visible := m.visibleFileEntries()
+	if len(visible) < 2 {
+		t.Fatalf("setup: expected >= 2 matches for 'src'; got %d", len(visible))
+	}
+
+	start := m.fileCursor
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = upd.(model)
+	if m.fileCursor != start+1 {
+		t.Errorf("Down arrow should advance cursor; start=%d now=%d", start, m.fileCursor)
+	}
+	if string(m.fileSearch) != "src" {
+		t.Errorf("Down arrow should not modify query; got %q", string(m.fileSearch))
+	}
+}

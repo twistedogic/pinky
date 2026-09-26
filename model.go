@@ -151,6 +151,13 @@ type model struct {
 	fileCursor    int
 	fileRoot      string
 
+	// fileSearchActive + fileSearch implement `/` fuzzy filename
+	// search inside stateFileNav. While active, collapse state is
+	// ignored and the visible list is filtered by fuzzyMatch
+	// against each entry's path.
+	fileSearchActive bool
+	fileSearch       []rune
+
 	// fileViewer is the state for stateFileView.
 	fileViewer fileViewer
 
@@ -522,17 +529,30 @@ func (m *model) enterFileNav() {
 		}
 	}
 	m.fileCursor = 0
+	m.fileSearchActive = false
+	m.fileSearch = nil
 	m.state = stateFileNav
 	m.reflow()
 }
 
 // visibleFileEntries returns the entries that should appear in
-// the dir navigator after applying m.fileCollapsed. A collapsed
-// dir hides itself and every descendant with Depth > dir.Depth
-// whose Path starts with dir.Path + "/".
+// the dir navigator. When file search is active and the query is
+// non-empty, fuzzy matching overrides the collapse map: every
+// entry whose path matches is shown in flat tree order. Otherwise
+// the collapse map hides collapsed dirs and their descendants.
 func (m model) visibleFileEntries() []workspace.Entry {
 	if len(m.fileEntries) == 0 {
 		return nil
+	}
+	if m.fileSearchActive && len(m.fileSearch) > 0 {
+		query := string(m.fileSearch)
+		out := make([]workspace.Entry, 0, len(m.fileEntries))
+		for _, e := range m.fileEntries {
+			if fuzzyMatch(query, e.Path) {
+				out = append(out, e)
+			}
+		}
+		return out
 	}
 	hidden := map[int]bool{}
 	for i, e := range m.fileEntries {
@@ -555,6 +575,27 @@ func (m model) visibleFileEntries() []workspace.Entry {
 		}
 	}
 	return out
+}
+
+// fuzzyMatch reports whether every rune of query appears in name
+// in order (case-insensitive). Empty query matches everything.
+// ponytail: ~6 lines of stdlib; no fuzzy-match dep needed.
+func fuzzyMatch(query, name string) bool {
+	if query == "" {
+		return true
+	}
+	qr := []rune(strings.ToLower(query))
+	nr := []rune(strings.ToLower(name))
+	qi := 0
+	for _, r := range nr {
+		if r == qr[qi] {
+			qi++
+			if qi == len(qr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // moveFileCursor clamps fileCursor into [0, len(visible)-1] after
@@ -910,8 +951,12 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // through visible entries, h collapses (or jumps to parent), l
 // expands (or jumps to first child), Enter opens a file or
 // toggles a dir, c opens the comment composer for the current
-// file. s flushes accumulated comments, q/Tab/Esc leave the tab.
+// file, `/` activates fuzzy search. s flushes accumulated
+// comments, q/Tab/Esc leave the tab.
 func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.fileSearchActive {
+		return m.handleFileNavSearchKey(msg)
+	}
 	visible := m.visibleFileEntries()
 	if isEsc(msg) || key.Matches(msg, defaultKeyMap.FileNavBack) {
 		return m, m.toggleTab()
@@ -933,6 +978,9 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case isKeyRune(msg, 'l'):
 		m.fileNavExpandOrChild()
+		return m, nil
+	case isKeyRune(msg, '/'):
+		m.enterFileSearch()
 		return m, nil
 	case key.Matches(msg, defaultKeyMap.FileNavComment) || isKeyRune(msg, 'c'):
 		// Whole-file comment, file-only. No-op on directories.
@@ -965,6 +1013,93 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// enterFileSearch turns on the fuzzy filter. The query starts
+// empty; the cursor stays on the entry it was on.
+func (m *model) enterFileSearch() {
+	m.fileSearchActive = true
+	m.fileSearch = nil
+}
+
+// handleFileNavSearchKey routes keys while the search input is
+// open. Printable runes go to the query (including j/k/h/l/c/s
+// — muscle memory has to give way to typing here, so navigation
+// is via Up/Down arrow keys). Backspace trims the query. Esc
+// cancels, Enter confirms by opening/toggling the cursor entry
+// (read from the still-filtered visible list, then the filter is
+// turned off so the file viewer / collapse toggle operates on the
+// regular tree).
+func (m model) handleFileNavSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if isEsc(msg) {
+		m.cancelFileSearch()
+		return m, nil
+	}
+	kp, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	switch kp.Code {
+	case tea.KeyEnter:
+		visible := m.visibleFileEntries()
+		if m.fileCursor < 0 || m.fileCursor >= len(visible) {
+			m.cancelFileSearch()
+			return m, nil
+		}
+		entry := visible[m.fileCursor]
+		m.fileSearchActive = false
+		m.fileSearch = nil
+		if entry.IsDir {
+			m.fileCollapsed[entry.Path] = !m.fileCollapsed[entry.Path]
+			return m, nil
+		}
+		m.openFileViewer(entry.Path)
+		return m, nil
+	case tea.KeyUp:
+		m.moveFileCursor(-1)
+		return m, nil
+	case tea.KeyDown:
+		m.moveFileCursor(+1)
+		return m, nil
+	case tea.KeyBackspace:
+		if len(m.fileSearch) > 0 {
+			m.fileSearch = m.fileSearch[:len(m.fileSearch)-1]
+			m.clampFileCursorAfterFilter()
+		}
+		return m, nil
+	}
+	if kp.Mod == 0 {
+		if r, ok := singleRune(msg); ok && r != 0 {
+			m.fileSearch = append(m.fileSearch, r)
+			m.clampFileCursorAfterFilter()
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// cancelFileSearch turns off the filter; the cursor is left where
+// it is in the (now unfiltered) tree.
+func (m *model) cancelFileSearch() {
+	m.fileSearchActive = false
+	m.fileSearch = nil
+}
+
+// clampFileCursorAfterFilter ensures the cursor stays within the
+// filtered list after a query change (typing can shrink the
+// list). Called from the search key handler.
+func (m *model) clampFileCursorAfterFilter() {
+	visible := m.visibleFileEntries()
+	if len(visible) == 0 {
+		m.fileCursor = 0
+		return
+	}
+	if m.fileCursor >= len(visible) {
+		m.fileCursor = len(visible) - 1
+	}
+	if m.fileCursor < 0 {
+		m.fileCursor = 0
+	}
 }
 
 // fileNavCollapseOrParent implements `h`: collapse the cursor's
@@ -1448,6 +1583,7 @@ func (m model) ShortHelp() []key.Binding {
 		return []key.Binding{
 			defaultKeyMap.FileNavOpen,
 			defaultKeyMap.FileNavComment,
+			defaultKeyMap.FileNavSearch,
 			defaultKeyMap.NavSend,
 			defaultKeyMap.Tab,
 			defaultKeyMap.Help,
@@ -1498,7 +1634,7 @@ func (m model) FullHelp() [][]key.Binding {
 	case stateFileNav:
 		return [][]key.Binding{
 			{defaultKeyMap.FileNavDown, defaultKeyMap.FileNavUp, defaultKeyMap.FileNavCollapse, defaultKeyMap.FileNavExpand},
-			{defaultKeyMap.FileNavOpen, defaultKeyMap.FileNavComment, defaultKeyMap.NavSend},
+			{defaultKeyMap.FileNavOpen, defaultKeyMap.FileNavComment, defaultKeyMap.FileNavSearch, defaultKeyMap.NavSend},
 			{defaultKeyMap.FileNavBack, defaultKeyMap.Tab, defaultKeyMap.Help},
 		}
 	case stateFileView:
@@ -1719,27 +1855,39 @@ func (m model) errorView() string {
 }
 
 // fileNavView renders the workspace header followed by the tree
-// of visible entries. Each line carries a 2-space indent per
-// depth level, a collapse marker (▾ expanded, ▸ collapsed) for
-// directories, and a cyan ▍ on the cursor's row.
+// of visible entries. When `/` search is active, a search input
+// line is inserted between the header and the tree, and the tree
+// shows only entries matching the fuzzy query (collapse map is
+// ignored during search). Each tree line carries a 2-space indent
+// per depth level, a collapse marker (▾ expanded, ▸ collapsed)
+// for directories, and a cyan ▍ on the cursor's row.
 func (m model) fileNavView() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
 	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true)
 
 	visible := m.visibleFileEntries()
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(fmt.Sprintf("workspace — %s", m.fileRoot)))
 	b.WriteByte('\n')
+	if m.fileSearchActive {
+		b.WriteString(promptStyle.Render("/") + " " + string(m.fileSearch) + dimStyle.Render("▏"))
+		b.WriteByte('\n')
+	}
 	if len(visible) == 0 {
-		b.WriteString(dimStyle.Render("  (empty)"))
+		if m.fileSearchActive {
+			b.WriteString(dimStyle.Render("  (no matches)"))
+		} else {
+			b.WriteString(dimStyle.Render("  (empty)"))
+		}
 		return b.String()
 	}
 	for i, e := range visible {
 		indent := strings.Repeat("  ", e.Depth-1)
 		marker := " "
-		if e.IsDir {
+		if e.IsDir && !m.fileSearchActive {
 			if m.fileCollapsed[e.Path] {
 				marker = "▸"
 			} else {

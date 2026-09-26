@@ -42,6 +42,7 @@ type keyMap struct {
 	FileNavExpand   key.Binding // l
 	FileNavOpen    key.Binding // enter
 	FileNavComment key.Binding // c
+	FileNavSearch  key.Binding // /
 	FileNavBack    key.Binding // esc
 
 	// File view (stateFileView).
@@ -159,6 +160,10 @@ var defaultKeyMap = keyMap{
 	FileNavComment: key.NewBinding(
 		key.WithKeys("c"),
 		key.WithHelp("c", "comment file"),
+	),
+	FileNavSearch: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
 	),
 	FileNavBack: key.NewBinding(
 		key.WithKeys("esc"),
