@@ -65,10 +65,10 @@ func codexSessionFile(pid int) (string, error) {
 	sc := bufio.NewScanner(strings.NewReader(string(out)))
 	for sc.Scan() {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "n") {
+		path, ok := strings.CutPrefix(line, "n")
+		if !ok {
 			continue
 		}
-		path := strings.TrimPrefix(line, "n")
 		if !strings.HasSuffix(path, ".jsonl") {
 			continue
 		}

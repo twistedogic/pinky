@@ -112,10 +112,10 @@ func parseLsofJSONL(lsofOut string) string {
 	sc := bufio.NewScanner(strings.NewReader(lsofOut))
 	for sc.Scan() {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "n") {
+		path, ok := strings.CutPrefix(line, "n")
+		if !ok {
 			continue
 		}
-		path := strings.TrimPrefix(line, "n")
 		if !strings.HasSuffix(path, ".jsonl") {
 			continue
 		}
