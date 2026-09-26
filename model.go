@@ -609,13 +609,7 @@ func (m *model) moveFileCursor(delta int) {
 		m.fileCursor = 0
 		return
 	}
-	m.fileCursor += delta
-	if m.fileCursor < 0 {
-		m.fileCursor = 0
-	}
-	if m.fileCursor >= n {
-		m.fileCursor = n - 1
-	}
+	m.fileCursor = min(max(m.fileCursor+delta, 0), n-1)
 }
 
 
@@ -1092,12 +1086,7 @@ func (m *model) clampFileCursorAfterFilter() {
 		m.fileCursor = 0
 		return
 	}
-	if m.fileCursor >= len(visible) {
-		m.fileCursor = len(visible) - 1
-	}
-	if m.fileCursor < 0 {
-		m.fileCursor = 0
-	}
+	m.fileCursor = min(max(m.fileCursor, 0), len(visible)-1)
 }
 
 // fileNavCollapseOrParent implements `h`: collapse the cursor's
@@ -1316,27 +1305,20 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // end of the destination line). After the move the file viewport
 // is scrolled so the cursor stays visible (1-line cushion).
 func (m *model) fileViewMoveLine(delta int) {
-	max := len(m.fileViewer.lines)
-	if max == 0 {
+	n := len(m.fileViewer.lines)
+	if n == 0 {
 		return
 	}
-	next := m.fileViewer.cursor + delta
-	if next < 1 {
-		next = 1
-	}
-	if next > max {
-		next = max
-	}
-	m.fileViewer.cursor = next
+	m.fileViewer.cursor = min(max(m.fileViewer.cursor+delta, 1), n)
 	if m.fileViewer.visual.Active {
 		v := &m.fileViewer.visual
-		v.LineC = next
+		v.LineC = m.fileViewer.cursor
 		// When extending the line range with j/k, snap the anchor
 		// charA to the start of the first selected line and charC
 		// to the end of the last selected line. Compute both ends
 		// from the line endpoints regardless of delta direction.
 		v.CharA = 0
-		v.CharC = len(m.fileViewer.lines[next-1])
+		v.CharC = len(m.fileViewer.lines[m.fileViewer.cursor-1])
 	}
 	m.scrollFileCursorIntoView()
 	m.refreshFileView()
