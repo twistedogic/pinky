@@ -154,6 +154,11 @@ type model struct {
 	fileCursor    int
 	fileRoot      string
 
+	// headerHeight is the number of terminal rows the top header
+	// occupies (1 or 2). Recomputed by reflow() so other layout
+	// code can subtract it from the row budget without re-rendering.
+	headerHeight int
+
 	// fileSearchActive + fileSearch implement `/` fuzzy filename
 	// search inside stateFileNav. While active, collapse state is
 	// ignored and the visible list is filtered by fuzzyMatch
@@ -1481,6 +1486,10 @@ func (m *model) reflow() {
 	if m.state == stateFileView {
 		vpHeight-- // ponytail: header line above the file viewport.
 	}
+	// Top header: 1 or 2 rows depending on width / cwd length.
+	// Compute once and subtract so layout stays in one place.
+	m.headerHeight = strings.Count(m.headerView(), "\n") + 1
+	vpHeight -= m.headerHeight
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -1647,6 +1656,25 @@ var tabChipStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("241")).
 	Padding(0, 1)
 
+// dimStyle is the foreground-only dim color used for non-emphatic
+// chrome (header cwd, picker row labels). Same color as
+// statusBarStyle foreground so the dim palette stays consistent.
+var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+// pendingIdleStyle / pendingArmedStyle paint the header's right
+// pending-comment count. Yellow always (zero still visible), bold
+// when > 0 to flag "unsent stuff waiting".
+// ponytail: zero-still-visible is intentional — hiding it on 0
+// trades discoverability for one fewer color cue.
+var (
+	pendingIdleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+	pendingArmedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Bold(true)
+)
+
+// headerAbbrevLevels is the sequence of maxSegs values the header
+// tries in order before falling back to a 2-line split on `/`.
+var headerAbbrevLevels = []int{2, 1}
+
 func (m *model) refreshViewport() {
 	if m.latest.Text == "" {
 		m.blocks = nil
@@ -1721,6 +1749,9 @@ func (m model) View() tea.View {
 	// Help footer is rendered for every state; `?` flips it between
 	// the one-line short view and the multi-column full view.
 	helpView := m.help.View(m)
+	// Top header is shared by every attached state. The picker
+	// (no agent yet) and the error screen skip it.
+	header := m.headerView()
 	var content string
 	switch m.state {
 	case statePicking:
@@ -1728,8 +1759,16 @@ func (m model) View() tea.View {
 			m.pickerView(),
 			helpView,
 		))
+	case stateNav:
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			m.viewport.View(),
+			helpView,
+			m.statusLine(),
+		))
 	case stateCompose:
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
 			m.viewport.View(),
 			m.textarea.View(),
 			helpView,
@@ -1745,6 +1784,7 @@ func (m model) View() tea.View {
 			body = m.fileViewView()
 		}
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
 			body,
 			m.commentTa.View(),
 			helpView,
@@ -1752,12 +1792,14 @@ func (m model) View() tea.View {
 		))
 	case stateFileNav:
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
 			m.fileNavView(),
 			helpView,
 			m.statusLine(),
 		))
 	case stateFileView:
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
 			m.fileViewView(),
 			helpView,
 			m.statusLine(),
@@ -1791,6 +1833,99 @@ func padRight(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", pad)
+}
+
+// shortenCwd abbreviates an absolute path to ~/last-N-segments so
+// the header line stays compact at typical widths. Already-~/
+// paths are returned unchanged. maxSegs is the number of trailing
+// segments to keep (maxSegs=2 keeps the last two: "/a/b/c" →
+// "~/b/c"). Empty input returns empty.
+func shortenCwd(path string, maxSegs int) string {
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		return path
+	}
+	cleaned := strings.TrimPrefix(path, "/")
+	parts := strings.Split(cleaned, "/")
+	if len(parts) <= maxSegs {
+		return path
+	}
+	return "~/" + strings.Join(parts[len(parts)-maxSegs:], "/")
+}
+
+// splitOnSlash returns (prefix, rest) where prefix is the longest
+// slash-separated prefix of s whose width is <= max. If s fits
+// entirely, rest is empty. If s has no slash that can be split
+// (single segment), returns (s, "") — caller decides how to render
+// the overflow. Used as the header's last-resort wrap.
+func splitOnSlash(s string, max int) (string, string) {
+	if max <= 0 || ansi.StringWidth(s) <= max {
+		return s, ""
+	}
+	parts := strings.Split(s, "/")
+	if len(parts) < 2 {
+		return s, ""
+	}
+	var prefix strings.Builder
+	for i, p := range parts {
+		seg := p
+		if i > 0 {
+			seg = "/" + p
+		}
+		if i > 0 && ansi.StringWidth(prefix.String()+seg) > max {
+			return prefix.String(), strings.Join(parts[i:], "/")
+		}
+		prefix.WriteString(seg)
+	}
+	return s, ""
+}
+
+// headerView renders the top header: cwd (left, dim) + pending
+// comment count (right, yellow / bold when > 0). Wrap pipeline:
+// try maxSegs=2, fall back to maxSegs=1, fall back to a 2-line
+// split on `/`. Always pads to m.width; returns the raw line when
+// m.width is 0 (pre-WindowSizeMsg).
+func (m *model) headerView() string {
+	width := m.width
+	if width <= 0 {
+		// ponytail: pre-WindowSizeMsg fallback matches the old
+		// statusLine behavior — return the natural-width content.
+		return m.headerLine(shortenCwd(m.fileRoot, 2), len(m.comments))
+	}
+	count := len(m.comments)
+	for _, maxSegs := range headerAbbrevLevels {
+		line := m.headerLine(shortenCwd(m.fileRoot, maxSegs), count)
+		if ansi.StringWidth(line) <= width {
+			return padRight(line, width)
+		}
+	}
+	// Last resort: split path across two lines; count moves to line 2.
+	path := shortenCwd(m.fileRoot, 1)
+	if a, b := splitOnSlash(path, width); b != "" {
+		style := pendingIdleStyle
+		if count > 0 {
+			style = pendingArmedStyle
+		}
+		return padRight(dimStyle.Render(a), width) + "\n" +
+			padRight(style.Render(fmt.Sprintf("%d pending", count)), width)
+	}
+	return padRight(m.headerLine(path, count), width)
+}
+
+// headerLine builds one row of the header: dim cwd on the left,
+// yellow pending count on the right, no padding (caller pads
+// once the wrap decision is made). Extracted so headerView's
+// try/abbreviate loop can compare widths cheaply.
+func (m *model) headerLine(path string, count int) string {
+	left := dimStyle.Render(path)
+	style := pendingIdleStyle
+	if count > 0 {
+		style = pendingArmedStyle
+	}
+	right := style.Render(fmt.Sprintf("%d pending", count))
+	return left + right
 }
 
 // fillWidth pads every line of s to m.width so the rendered output
@@ -2014,7 +2149,10 @@ func (m model) statusLine() string {
 	if m.streaming {
 		dot = "●"
 	}
-	text := fmt.Sprintf("%s %s", dot, m.pane)
+	// ponytail: pane id and pending comment count moved to the top
+	// header — status line now carries only ephemeral / state-local
+	// chips (streaming dot, include toggle, visual mode, tab).
+	text := dot
 	if m.state == stateCompose && len(m.comments) > 0 {
 		flag := "OFF"
 		if m.includeComments {

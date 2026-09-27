@@ -212,23 +212,26 @@ func TestVisual_JMovesCursorAcrossBlocks(t *testing.T) {
 
 	// Cyan left-gutter (▍) follows the cursor's block — every line
 	// inside the new block starts with ▍, the previous block's
-	// lines do not.
+	// lines do not. Block line indices are relative to the rendered
+	// markdown; the top header (cwd + pending count) occupies the
+	// first headerHeight lines of the View, so offset by that.
 	plain := stripANSI(m.View().Content)
 	focused := m.blocks[m.cursor.BlockIdx]
 	prev := m.blocks[startBlock]
+	off := m.headerHeight
 	for i := focused.StartLine; i <= focused.EndLine; i++ {
-		line := lineAt(plain, i)
+		line := lineAt(plain, i+off)
 		if !strings.HasPrefix(line, "▍") {
-			t.Errorf("focused block line %d should start with ▍ gutter; got %q", i, line)
+			t.Errorf("focused block line %d should start with ▍ gutter; got %q", i+off, line)
 		}
 	}
 	for i := prev.StartLine; i <= prev.EndLine; i++ {
 		if i >= focused.StartLine && i <= focused.EndLine {
 			continue
 		}
-		line := lineAt(plain, i)
+		line := lineAt(plain, i+off)
 		if strings.HasPrefix(line, "▍") {
-			t.Errorf("previous block line %d should NOT start with ▍ (focus moved); got %q", i, line)
+			t.Errorf("previous block line %d should NOT start with ▍ (focus moved); got %q", i+off, line)
 		}
 	}
 }
