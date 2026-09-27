@@ -423,16 +423,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case sessionMsg:
-		// ponytail: every poll result must re-arm the next Tick,
-		// not just the error path. Without this the first poll
-		// delivers historical entries and polling stops — pinky
-		// never picks up new codex messages after attach.
+		// ponytail: polling stops deliberately after the first
+		// message; `r` is the manual gate, see proposal.md.
 		if msg.err != nil {
-			return m, pollCmd(m.src)
+			return m, nil
 		}
 		if len(msg.entries) == 0 {
 			m.streaming = false
-			return m, pollCmd(m.src)
+			return m, nil
 		}
 		// Find the latest assistant message in this poll. A user redirect
 		// arriving after the agent's last reply should NOT replace the
@@ -460,7 +458,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// single source of truth, no custom buffer needed.
 			m.viewport.GotoTop()
 		}
-		return m, pollCmd(m.src)
+		return m, nil
 	}
 
 	// ponytail: LSP replies only carry meaning while the file

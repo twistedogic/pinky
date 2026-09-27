@@ -25,8 +25,8 @@ func TestCommitFirstLineVisible(t *testing.T) {
 	upd, cmd := m.Update(sessionMsg{entries: src.messages})
 	mv := upd.(model)
 	m = &mv
-	if cmd == nil {
-		t.Fatal("first poll should re-arm")
+	if cmd != nil {
+		t.Fatalf("first poll must not re-arm under manual refresh; got cmd=%v", cmd)
 	}
 	if mv.latest.Text == "" {
 		t.Fatal("after poll: latest.Text should be set")
