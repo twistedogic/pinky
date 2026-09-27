@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/twistedogic/pinky/internal/history"
 	"github.com/twistedogic/pinky/internal/inject"
+	pinkylsp "github.com/twistedogic/pinky/internal/lsp"
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
 	"github.com/twistedogic/pinky/internal/workspace"
@@ -41,6 +43,7 @@ const (
 	stateCommentComposer
 	stateFileNav
 	stateFileView
+	stateLSPPicker
 	stateError
 )
 
@@ -82,6 +85,41 @@ type fileSelection struct {
 	Active       bool
 }
 
+// lspPickerState holds the locations being shown by the LSP
+// location picker (stateLSPPicker). Populated by the
+// LocationsMsg handler; consumed by handleLSPPickerKey.
+//
+// WorkDir is the manager's rootURI path; used to relativise
+// location URIs for the rendered "<relpath>:<line>:<col>" rows.
+// ponytail: kept on the state so the picker doesn't need to
+// capture the manager at construction time.
+type lspPickerState struct {
+	label      string
+	locations  []pinkylsp.Location
+	cursor     int
+	workDir    string
+}
+
+// lspManager is the slice of *pinkylsp.Manager the model layer
+// uses. Declared as an interface so unit tests can substitute a
+// fake without spawning gopls.
+type lspManager interface {
+	DidOpen(ctx context.Context, path, content string)
+	DidClose(ctx context.Context, path string)
+	FindDefinition(ctx context.Context, path string, line, char int)
+	FindReferences(ctx context.Context, path string, line, char int)
+	Hover(ctx context.Context, path string, line, char int)
+	Shutdown(ctx context.Context)
+}
+
+// lspBridge is the slice of *pinkylsp.Bridge the model layer
+// uses. Tests substitute their own implementation.
+type lspBridge interface {
+	RequestDefinition(ctx context.Context, path string, line, char int) tea.Cmd
+	RequestReferences(ctx context.Context, path string, line, char int) tea.Cmd
+	RequestHover(ctx context.Context, path string, line, char int) tea.Cmd
+}
+
 // fileViewer holds the state for stateFileView: the raw content,
 // the line index (parallel to lines, drives gutter flags), the
 // cursor (line + char), an optional visual selection, and the
@@ -91,6 +129,7 @@ type fileViewer struct {
 	content   string
 	lines     []string // raw lines, no trailing newline
 	cursor    int      // 1-based line index
+	charPos   int      // ponytail: byte offset into cursor line; LSP queries at (cursor, charPos)
 	visual    fileSelection
 	lineIndex []render.FileLine // parallel to lines
 	viewport  viewport.Model    // ponytail: scrollable view of the rendered file
@@ -178,6 +217,28 @@ type model struct {
 	// comment. CharStart/End are derived when saving (CharStart ==
 	// CharEnd == -1 means block-level).
 	commentAnchor commentAnchor
+
+	// LSP integration: a single Manager + Bridge is shared across
+	// the session. nil-safe — tests that don't care about LSP
+	// leave lsp unset. The fields are interface-typed so unit
+	// tests can substitute a fake without spinning up powernap.
+	lsp     lspManager
+	lsphub  lspBridge
+
+	// lspPicker is the state for stateLSPPicker (definition or
+	// references). Populated by the LocationsMsg handler.
+	lspPicker lspPickerState
+
+	// hoverFooter is the one-line hover content rendered between
+	// the file body and the help line. Cleared on any non-hover
+	// key press (see handleFileViewKey).
+	hoverFooter string
+
+	// missingServerHint is the install hint shown when an LSP server
+	// binary is not on PATH. Set from LocationsMsg.ServerMissing /
+	// HoverMsg.ServerMissing; cleared by the same handlers on
+	// the next key press.
+	missingServerHint string
 
 	// Error state: set when initialization or attach fails. The TUI
 	// shows the message and exits on any key press.
@@ -292,6 +353,12 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	if pane != "" {
 		if cwd, err := session.PaneCwd(pane); err == nil {
 			m.fileRoot = cwd
+			// ponytail: one LSP Manager per pane session, owned
+			// by the model. Lazy-spawns servers on first
+			// file-viewer query; no goroutines fire until then.
+			mgr := pinkylsp.New(cwd)
+			m.lsp = mgr
+			m.lsphub = pinkylsp.NewBridge(mgr)
 		}
 	}
 }
@@ -396,6 +463,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, pollCmd(m.src)
 	}
 
+	// ponytail: LSP replies only carry meaning while the file
+	// viewer is the active view. Stale replies that arrive after
+	// the user has navigated away are dropped silently — the
+	// bridge's id-check already filters superseded ones.
+	if msg, ok := msg.(pinkylsp.LocationsMsg); ok {
+		return m.handleLocationsMsg(msg)
+	}
+	if msg, ok := msg.(pinkylsp.HoverMsg); ok {
+		return m.handleHoverMsg(msg)
+	}
+
 	var cmds []tea.Cmd
 	switch m.state {
 	case stateCompose:
@@ -408,6 +486,93 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, vpCmd)
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// handleLocationsMsg routes a definition / references reply into
+// the model: 0 results = silent, 1 = jump (definition only) /
+// picker (references), N>1 = picker. ServerMissing surfaces the
+// install hint footer.
+func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd) {
+	if msg.ServerMissing && msg.InstallHint != "" {
+		m.missingServerHint = msg.InstallHint
+		m.refreshFileView()
+		return m, nil
+	}
+	if msg.Err != nil {
+		return m, nil
+	}
+	label := kindLabel(msg.Kind)
+	switch len(msg.Locations) {
+	case 0:
+		return m, nil
+	case 1:
+		// Definition-on-one-result jumps; references-on-one-result
+		// still goes through the picker so the user sees the
+		// single row (matches D5's "always picker" rule).
+		if label == "definition" {
+			m.jumpToLocation(msg.Locations[0])
+			return m, nil
+		}
+		m.lspPicker = lspPickerState{
+			label:     label,
+			locations: msg.Locations,
+			cursor:    0,
+			workDir:   msg.WorkDir,
+		}
+		m.state = stateLSPPicker
+		m.reflow()
+		return m, nil
+	default:
+		m.lspPicker = lspPickerState{
+			label:     label,
+			locations: msg.Locations,
+			cursor:    0,
+			workDir:   msg.WorkDir,
+		}
+		m.state = stateLSPPicker
+		m.reflow()
+		return m, nil
+	}
+}
+
+// kindLabel maps an LSP Kind to the human-readable label the
+// picker header renders ("definition" / "references").
+func kindLabel(k pinkylsp.Kind) string {
+	switch k {
+	case pinkylsp.KindDefinition:
+		return "definition"
+	case pinkylsp.KindReferences:
+		return "references"
+	}
+	return ""
+}
+
+// handleHoverMsg sets the one-line hover footer. Multi-line
+// content is truncated to the first line with an ellipsis
+// (spec D8). Empty content is silent (gopls returns a null hover
+// on whitespace — pinky treats that as no result).
+func (m model) handleHoverMsg(msg pinkylsp.HoverMsg) (tea.Model, tea.Cmd) {
+	if msg.ServerMissing && msg.InstallHint != "" {
+		m.missingServerHint = msg.InstallHint
+		m.refreshFileView()
+		return m, nil
+	}
+	if msg.Err != nil || msg.Contents == "" {
+		return m, nil
+	}
+	m.hoverFooter = truncateFirstLine(msg.Contents)
+	m.refreshFileView()
+	return m, nil
+}
+
+// truncateFirstLine returns the substring of s up to the first
+// newline, with "…" appended if truncation happened. Used by the
+// hover footer to satisfy spec D8.
+func truncateFirstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i] + "…"
+	}
+	return s
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -446,6 +611,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFileNavKey(msg)
 	case stateFileView:
 		return m.handleFileViewKey(msg)
+	case stateLSPPicker:
+		return m.handleLSPPickerKey(msg)
 	case stateError:
 		// Any key dismisses the error and quits.
 		if key.Matches(msg, defaultKeyMap.QuitError) {
@@ -1166,11 +1333,20 @@ func (m *model) openFileViewer(path string) {
 		content:   content,
 		lines:     strings.Split(strings.TrimRight(content, "\n"), "\n"),
 		cursor:    1,
+		charPos:   0,
 		visual:    fileSelection{LineA: 1, CharA: 0, LineC: 1, CharC: 0},
 		lineIndex: render.MarkLines(content, m.fileCommentsFor(path)),
 		viewport:  viewport.New(viewport.WithWidth(w), viewport.WithHeight(h)),
 	}
 	m.state = stateFileView
+	// ponytail: notify the LSP server that the file is open so
+	// definition/references/hover have something to look at. Best
+	// effort — a missing server (or one that's still spawning) is
+	// a no-op; the user just sees no replies until the server is
+	// ready, and the next explicit query will re-trigger.
+	if m.lsp != nil {
+		m.lsp.DidOpen(context.Background(), full, content)
+	}
 	m.reflow()
 	m.refreshFileView()
 }
@@ -1187,9 +1363,9 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 }
 
 // handleFileViewKey routes keys in stateFileView: j/k move the
-// line cursor, v enters visual, h/l extend visual cursor by rune,
-// c opens the comment composer, s flushes, Esc returns to dir nav,
-// Tab returns to message tab.
+// line cursor, h/l move the column cursor, v enters visual,
+// c opens the comment composer, s flushes, d/R/K fire LSP
+// queries, Esc returns to dir nav, Tab returns to message tab.
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc is handled before rune routing so visual-mode exit feels
 	// like the message viewer's.
@@ -1199,19 +1375,20 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshFileView()
 			return m, nil
 		}
-		m.state = stateFileNav
-		m.reflow()
+		m.exitFileViewer()
 		return m, nil
 	}
 
 	if key.Matches(msg, defaultKeyMap.FileNavBack) && !isEsc(msg) {
-		m.state = stateFileNav
-		m.reflow()
+		m.exitFileViewer()
 		return m, nil
 	}
 
 	switch {
 	case isKeyRune(msg, 'q'):
+		// ponytail: quit is a hard exit; no didClose round-trip
+		// (the process is going down). Powernap's Kill handles
+		// the wire side.
 		return m, tea.Quit
 	case isKeyRune(msg, 's'):
 		m.handleSend()
@@ -1227,32 +1404,48 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshFileView()
 		return m, nil
+	case key.Matches(msg, defaultKeyMap.FileViewDefinition):
+		// ponytail: clear hover + missing-hint so a stale footer
+		// doesn't linger when the user fires a definition query.
+		m.hoverFooter = ""
+		m.missingServerHint = ""
+		return m, m.requestLSP(m.lsphub.RequestDefinition)
+	case key.Matches(msg, defaultKeyMap.FileViewReferences):
+		m.hoverFooter = ""
+		m.missingServerHint = ""
+		return m, m.requestLSP(m.lsphub.RequestReferences)
+	case key.Matches(msg, defaultKeyMap.FileViewHover):
+		m.missingServerHint = ""
+		return m, m.requestLSP(m.lsphub.RequestHover)
 	}
 
 	if isKeyRune(msg, 'j') {
+		m.clearHoverFooter()
 		m.fileViewMoveLine(+1)
 		return m, nil
 	}
 	if isKeyRune(msg, 'k') {
+		m.clearHoverFooter()
 		m.fileViewMoveLine(-1)
 		return m, nil
 	}
 
-	// h / l: rune-granular in visual mode, no-op outside.
+	// h / l: always advance the column cursor. fileViewMoveRune
+	// updates visual.CharC when visual is active so the cyan
+	// highlight tracks the cursor exactly as today.
 	if isKeyRune(msg, 'l') {
-		if m.fileViewer.visual.Active {
-			m.fileViewMoveRune(+1)
-			return m, nil
-		}
+		m.clearHoverFooter()
+		m.fileViewMoveRune(+1)
+		return m, nil
 	}
 	if isKeyRune(msg, 'h') {
-		if m.fileViewer.visual.Active {
-			m.fileViewMoveRune(-1)
-			return m, nil
-		}
+		m.clearHoverFooter()
+		m.fileViewMoveRune(-1)
+		return m, nil
 	}
 
 	if isKeyRune(msg, 'c') {
+		m.clearHoverFooter()
 		m.openFileComment()
 		return m, nil
 	}
@@ -1285,16 +1478,77 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleLSPPickerKey routes keys in stateLSPPicker: j/k move the
+// cursor through locations, Enter selects (jumps), Esc dismisses
+// back to stateFileView, q quits pinky. Matches the session
+// picker's surface so muscle memory carries over.
+func (m model) handleLSPPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case isEsc(msg):
+		m.dismissLSPPicker()
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.Pick):
+		if m.lspPicker.cursor >= 0 && m.lspPicker.cursor < len(m.lspPicker.locations) {
+			m.jumpToLocation(m.lspPicker.locations[m.lspPicker.cursor])
+		}
+		m.dismissLSPPicker()
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.Up):
+		m.moveLSPPickerCursor(-1)
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.Down):
+		m.moveLSPPickerCursor(+1)
+		return m, nil
+	case key.Matches(msg, defaultKeyMap.QuitPick):
+		return m, tea.Quit
+	case isKeyRune(msg, 'q'):
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// moveLSPPickerCursor clamps the picker's cursor into [0, len-1]
+// after applying delta. No-op when the picker is empty.
+func (m *model) moveLSPPickerCursor(delta int) {
+	n := len(m.lspPicker.locations)
+	if n == 0 {
+		m.lspPicker.cursor = 0
+		return
+	}
+	m.lspPicker.cursor = min(max(m.lspPicker.cursor+delta, 0), n-1)
+}
+
+// dismissLSPPicker returns to stateFileView and clears the picker
+// state. If the file viewer has no current path (e.g. the user
+// dismissed after a cross-file jump that already closed the
+// viewer), fall back to stateFileNav.
+func (m *model) dismissLSPPicker() {
+	m.lspPicker = lspPickerState{}
+	if m.fileViewer.path != "" {
+		m.state = stateFileView
+	} else {
+		m.state = stateFileNav
+	}
+	m.reflow()
+}
+
 // fileViewMoveLine moves the cursor line by delta, extending the
 // visual selection if active (charA snaps to 0, charC snaps to the
 // end of the destination line). After the move the file viewport
-// is scrolled so the cursor stays visible (1-line cushion).
+// is scrolled so the cursor stays visible (1-line cushion). The
+// column cursor (charPos) is clamped to the new line's byte length
+// so LSP queries never point past the line end.
 func (m *model) fileViewMoveLine(delta int) {
 	n := len(m.fileViewer.lines)
 	if n == 0 {
 		return
 	}
 	m.fileViewer.cursor = min(max(m.fileViewer.cursor+delta, 1), n)
+	// ponytail: clamp charPos to the new line's byte length. The
+	// LSP client expects an in-range byte offset; clamping here
+	// keeps every caller honest without per-method guards.
+	lineLen := len(m.fileViewer.lines[m.fileViewer.cursor-1])
+	m.fileViewer.charPos = min(m.fileViewer.charPos, lineLen)
 	if m.fileViewer.visual.Active {
 		v := &m.fileViewer.visual
 		v.LineC = m.fileViewer.cursor
@@ -1303,7 +1557,7 @@ func (m *model) fileViewMoveLine(delta int) {
 		// to the end of the last selected line. Compute both ends
 		// from the line endpoints regardless of delta direction.
 		v.CharA = 0
-		v.CharC = len(m.fileViewer.lines[m.fileViewer.cursor-1])
+		v.CharC = lineLen
 	}
 	m.scrollFileCursorIntoView()
 	m.refreshFileView()
@@ -1330,18 +1584,17 @@ func (m *model) scrollFileCursorIntoView() {
 	}
 }
 
-// fileViewMoveRune moves the visual-mode cursor one rune within
-// the current line. No-op when visual is inactive.
+// fileViewMoveRune moves the column cursor (fileViewer.charPos)
+// by one rune within the current line. Always active: in visual
+// mode the visual CharC is also advanced so the cyan selection
+// highlight tracks the cursor exactly as today.
 func (m *model) fileViewMoveRune(delta int) {
-	if !m.fileViewer.visual.Active {
-		return
-	}
 	lineIdx := m.fileViewer.cursor - 1
 	if lineIdx < 0 || lineIdx >= len(m.fileViewer.lines) {
 		return
 	}
 	line := m.fileViewer.lines[lineIdx]
-	c := m.fileViewer.visual.CharC
+	c := m.fileViewer.charPos
 	if delta > 0 {
 		if c >= len(line) {
 			return
@@ -1355,8 +1608,106 @@ func (m *model) fileViewMoveRune(delta int) {
 		_, sz := utf8.DecodeLastRuneInString(line[:c])
 		c -= sz
 	}
-	m.fileViewer.visual.CharC = c
+	m.fileViewer.charPos = c
+	if m.fileViewer.visual.Active {
+		m.fileViewer.visual.CharC = c
+	}
 	m.refreshFileView()
+}
+
+// requestLSP fires one of the three LSP queries at the file
+// viewer's (path, cursor, charPos). nil when m.lsphub is unset
+// (no LSP manager was wired up — tests that don't care). Each
+// of the bridge methods has the same signature, so we accept
+// the function reference instead of repeating the same boilerplate
+// three times. ponytail: shorter than 3 cases with the same body.
+func (m *model) requestLSP(issue func(ctx context.Context, path string, line, char int) tea.Cmd) tea.Cmd {
+	if m.lsphub == nil || m.fileViewer.path == "" {
+		return nil
+	}
+	return issue(context.Background(), m.fileRoot+"/"+m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos)
+}
+
+// exitFileViewer leaves stateFileView, sends didClose for the
+// current path, and clears transient LSP state. Called from
+// handleFileViewKey on Esc / Tab. The LSP close is best-effort;
+// the server may already be shutting down and errors are dropped.
+func (m *model) exitFileViewer() {
+	if m.fileViewer.path != "" && m.lsp != nil {
+		full := m.fileRoot + "/" + m.fileViewer.path
+		m.lsp.DidClose(context.Background(), full)
+	}
+	m.hoverFooter = ""
+	m.missingServerHint = ""
+	m.fileViewer.visual.Active = false
+	m.state = stateFileNav
+	m.reflow()
+}
+
+// clearHoverFooter drops the hover footer. Called from every
+// non-hover key in handleFileViewKey so the footer only lives
+// until the user does something else.
+func (m *model) clearHoverFooter() {
+	if m.hoverFooter != "" {
+		m.hoverFooter = ""
+	}
+	if m.missingServerHint != "" {
+		m.missingServerHint = ""
+	}
+}
+
+// jumpToLocation moves the cursor to loc. Same-file locations
+// only mutate cursor + charPos + scroll. Cross-file locations
+// close the current viewer and open a new one at (line, char).
+//
+// loc's Range.Start is 0-based per the LSP spec; pinky's file
+// viewer is 1-based, so we add 1 to land on the source line.
+// Char stays 0-based (matches pinky's byte-offset model).
+//
+// ponytail: relative path resolution reuses filepath.Rel so the
+// caller doesn't need to know the manager's rootURI.
+func (m *model) jumpToLocation(loc pinkylsp.Location) {
+	uriPath, err := pinkylsp.URIToPath(string(loc.URI))
+	if err != nil || uriPath == "" {
+		return
+	}
+	rel, err := filepath.Rel(m.fileRoot, uriPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		// Outside the workspace root — treat as a no-op so the
+		// user can dismiss the picker without teleporting.
+		return
+	}
+	if rel != m.fileViewer.path {
+		m.exitFileViewer()
+		m.openFileViewer(rel)
+		if m.state != stateFileView {
+			return
+		}
+	}
+	line := int(loc.Range.Start.Line) + 1 // LSP 0-based → 1-based
+	char := int(loc.Range.Start.Character)
+	if line < 1 {
+		line = 1
+	}
+	if line > len(m.fileViewer.lines) {
+		line = len(m.fileViewer.lines)
+	}
+	if char < 0 {
+		char = 0
+	}
+	if char > len(m.fileViewer.lines[line-1]) {
+		char = len(m.fileViewer.lines[line-1])
+	}
+	m.fileViewer.cursor = line
+	m.fileViewer.charPos = char
+	m.fileViewer.visual.Active = false
+	m.fileViewer.visual.LineA = line
+	m.fileViewer.visual.CharA = 0
+	m.fileViewer.visual.LineC = line
+	m.fileViewer.visual.CharC = char
+	m.scrollFileCursorIntoView()
+	m.refreshFileView()
+	m.hoverFooter = ""
 }
 
 // openFileComment opens the comment composer with an anchor from
@@ -1485,6 +1836,9 @@ func (m *model) reflow() {
 	}
 	if m.state == stateFileView {
 		vpHeight-- // ponytail: header line above the file viewport.
+		if m.hoverFooter != "" || m.missingServerHint != "" {
+			vpHeight-- // ponytail: one-line hover / install-hint footer.
+		}
 	}
 	// Top header: 1 or 2 rows depending on width / cwd length.
 	// Compute once and subtract so layout stays in one place.
@@ -1566,10 +1920,18 @@ func (m model) ShortHelp() []key.Binding {
 	case stateFileView:
 		return []key.Binding{
 			defaultKeyMap.FileViewComment,
+			defaultKeyMap.FileViewDefinition,
+			defaultKeyMap.FileViewReferences,
+			defaultKeyMap.FileViewHover,
 			defaultKeyMap.NavSend,
 			defaultKeyMap.FileNavBack,
 			defaultKeyMap.Tab,
 			defaultKeyMap.Help,
+		}
+	case stateLSPPicker:
+		return []key.Binding{
+			defaultKeyMap.Up, defaultKeyMap.Down,
+			defaultKeyMap.Pick, defaultKeyMap.QuitPick,
 		}
 	case stateError:
 		return []key.Binding{defaultKeyMap.QuitError}
@@ -1616,7 +1978,13 @@ func (m model) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp},
 			{defaultKeyMap.FileViewVisual, defaultKeyMap.FileViewComment, defaultKeyMap.NavSend},
+			{defaultKeyMap.FileViewDefinition, defaultKeyMap.FileViewReferences, defaultKeyMap.FileViewHover},
 			{defaultKeyMap.FileViewBack, defaultKeyMap.Tab, defaultKeyMap.Help},
+		}
+	case stateLSPPicker:
+		return [][]key.Binding{
+			{defaultKeyMap.Up, defaultKeyMap.Down},
+			{defaultKeyMap.Pick, defaultKeyMap.QuitPick},
 		}
 	case stateError:
 		return [][]key.Binding{
@@ -1801,6 +2169,14 @@ func (m model) View() tea.View {
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			header,
 			m.fileViewView(),
+			maybeHoverFooter(m),
+			helpView,
+			m.statusLine(),
+		))
+	case stateLSPPicker:
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			m.lspPickerView(),
 			helpView,
 			m.statusLine(),
 		))
@@ -2056,6 +2432,80 @@ func (m model) fileViewView() string {
 		header += fmt.Sprintf("  (lines %d-%d of %d)", top, bot, len(m.fileViewer.lines))
 	}
 	return headerStyle.Render(header) + "\n" + m.fileViewer.viewport.View()
+}
+
+// maybeHoverFooter returns the one-line hover / install-hint row
+// when either is set; empty string otherwise. The footer sits
+// between the file body and the help line.
+func maybeHoverFooter(m model) string {
+	hoverStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Italic(true)
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Italic(true)
+	if m.missingServerHint != "" {
+		return hintStyle.Render("ⓘ " + m.missingServerHint)
+	}
+	if m.hoverFooter != "" {
+		return hoverStyle.Render("⎡ " + m.hoverFooter)
+	}
+	return ""
+}
+
+// lspPickerView renders the stateLSPPicker: a header showing the
+// query kind ("definition" / "references"), then one row per
+// location with the relative path + 1-based line/col + a snippet.
+// Cyan ▶ marks the cursor; dim style for the rest.
+func (m model) lspPickerView() string {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(fmt.Sprintf("%s — %d location(s)", m.lspPicker.label, len(m.lspPicker.locations))))
+	b.WriteByte('\n')
+	if len(m.lspPicker.locations) == 0 {
+		b.WriteString(dimStyle.Render("  (empty)"))
+		return b.String()
+	}
+	for i, loc := range m.lspPicker.locations {
+		uriPath, err := pinkylsp.URIToPath(string(loc.URI))
+		if err != nil {
+			uriPath = string(loc.URI)
+		}
+		rel, _ := filepath.Rel(m.fileRoot, uriPath)
+		if rel == "" || strings.HasPrefix(rel, "..") {
+			rel = uriPath
+		}
+		line := int(loc.Range.Start.Line) + 1
+		char := int(loc.Range.Start.Character)
+		snippet := m.locationSnippet(uriPath, int(loc.Range.Start.Line))
+		lineText := fmt.Sprintf("%s:%d:%d  %s", rel, line, char, snippet)
+		if i == m.lspPicker.cursor {
+			b.WriteString(selectedStyle.Render("▶ " + lineText))
+		} else {
+			b.WriteString(normalStyle.Render("  " + lineText))
+		}
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// locationSnippet returns the single-line source at uriPath's
+// `line` (0-based). Empty on read failure — the picker shows the
+// location without the snippet rather than crashing.
+func (m model) locationSnippet(uriPath string, line int) string {
+	data, err := os.ReadFile(uriPath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	if line < 0 || line >= len(lines) {
+		return ""
+	}
+	s := strings.TrimSpace(lines[line])
+	if len(s) > 60 {
+		s = s[:60] + "…"
+	}
+	return s
 }
 
 // refreshFileView rebuilds the file viewer's content and hands it

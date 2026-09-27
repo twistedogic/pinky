@@ -46,11 +46,14 @@ type keyMap struct {
 	FileNavBack    key.Binding // esc
 
 	// File view (stateFileView).
-	FileViewUp     key.Binding // k, ↑
-	FileViewDown   key.Binding // j, ↓
-	FileViewVisual key.Binding // v
-	FileViewComment key.Binding // c
-	FileViewBack   key.Binding // esc
+	FileViewUp         key.Binding // k, ↑
+	FileViewDown       key.Binding // j, ↓
+	FileViewVisual     key.Binding // v
+	FileViewComment    key.Binding // c
+	FileViewDefinition key.Binding // d
+	FileViewReferences key.Binding // R
+	FileViewHover      key.Binding // K
+	FileViewBack       key.Binding // esc
 
 	// Compose
 	Newline         key.Binding // enter
@@ -190,6 +193,18 @@ var defaultKeyMap = keyMap{
 	FileViewBack: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "back"),
+	),
+	FileViewDefinition: key.NewBinding(
+		key.WithKeys("d"),
+		key.WithHelp("d", "definition"),
+	),
+	FileViewReferences: key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "references"),
+	),
+	FileViewHover: key.NewBinding(
+		key.WithKeys("K"),
+		key.WithHelp("K", "hover"),
 	),
 
 	// Compose

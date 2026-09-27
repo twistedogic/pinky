@@ -146,19 +146,27 @@ to the message view, restoring the sub-state you left.
 
 | Key | Action |
 |---|---|
-| `j` / `↓` | Next line (visual: extend line range) |
-| `k` / `↑` | Previous line (visual: retract line range) |
-| `h` / `l` | Visual mode only: move cursor one rune on the current line |
+| `j` / `↓` | Next line (visual: extend line range); column cursor clamps to the new line's length |
+| `k` / `↑` | Previous line (visual: retract line range); column cursor clamps to the new line's length |
+| `h` / `l` | Move the column cursor one rune (visual: also extend `CharC`); always active |
 | `v` | Enter / exit visual selection |
 | `c` | Open the comment composer (whole file when no selection; line range or inline char range when visual is active) |
+| `d` | Go to definition at `(line, charPos)` — jumps on 1 result, picker on N>1, silent on 0 |
+| `R` | Find references at `(line, charPos)` — picker on N≥1, silent on 0 |
+| `K` | Hover at `(line, charPos)` — footer line until the next key press |
 | `s` | Send all accumulated comments |
-| `Esc` | Return to the dir navigator |
+| `Esc` | Return to the dir navigator (also clears hover / visual) |
 | `Tab` | Switch to the message view |
+| `q` | Quit pinky |
 | `?` | Toggle the keymap page |
 
 Lines that carry at least one file-kind comment show a yellow
 `▍` in the left gutter; the active visual selection shows a
 cyan highlight on the byte range that `c` will anchor against.
+`d` / `R` / `K` speak Language Server Protocol (LSP); the
+server binary is detected from the file extension and lazily
+spawned on first use, so the first query for a new language
+takes ~1 s and a missing server shows a one-line install hint.
 
 ### Compose
 
