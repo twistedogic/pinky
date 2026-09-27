@@ -39,8 +39,7 @@ func openCodex(pid int, cwd string) (*codexSource, error) {
 		"troubleshooting:\n"+
 		"  - cwd-based lookup under the codex sessions root found nothing\n"+
 		"  - lsof on pid %d found no open .jsonl\n"+
-		"  - run with PINKY_DEBUG=1 for verbose discovery output\n"+
-		"  - bypass with --session-file /path/to/session.jsonl",
+		"  - run with PINKY_DEBUG=1 for verbose discovery output",
 		pid, pid)
 }
 

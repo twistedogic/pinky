@@ -29,12 +29,3 @@ func RequireServer() error {
 	}
 	return nil
 }
-
-// PaneExists checks whether the given tmux pane id resolves.
-func PaneExists(pane string) bool {
-	out, err := Run("", "display-message", "-t", pane, "-p", "#{pane_id}")
-	if err != nil || out == "" {
-		return false
-	}
-	return true
-}

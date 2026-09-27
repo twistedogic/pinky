@@ -62,8 +62,7 @@ func openPi(pid int, cwd string) (*piSource, error) {
 		"  - PI_SESSION_FILE not set in the process env\n"+
 		"  - cwd-based lookup under the pi sessions root found nothing\n"+
 		"  - lsof on the process found no open .jsonl\n"+
-		"  - run with PINKY_DEBUG=1 for verbose discovery output\n"+
-		"  - bypass with --session-file /path/to/session.jsonl",
+		"  - run with PINKY_DEBUG=1 for verbose discovery output",
 		pid)
 }
 

@@ -46,7 +46,7 @@ back into the agent's input.
 Set `PINKY_DEBUG=1` to log session-discovery diagnostics to stderr:
 
 ```sh
-PINKY_DEBUG=1 pinky --target %1
+PINKY_DEBUG=1 pinky
 ```
 
 When pinky can't find the session file, the TUI shows an error with
@@ -84,30 +84,6 @@ pinky: pick an agent session
 Use arrow keys to move, Enter to select. Pinky then transitions to its
 running state bound to that pane.
 
-### Bypass the picker
-
-If you already know which pane you want, pass `--target`:
-
-```sh
-pinky --target %12
-```
-
-`%12` is the tmux pane id (shown in `tmux display-message -p '#{pane_id}'`).
-
-### Bypass pane discovery
-
-If pinky can't find the session file via `PI_SESSION_FILE` or `lsof`
-(e.g. pi running in a wrapper that strips the env, or in a container
-without shared `/proc`), point pinky at the file directly:
-
-```sh
-pinky --session-file ~/.pi/sessions/abc.jsonl
-```
-
-The file format (pi vs. codex JSONL) is auto-detected from the first
-line. Combine with `--target` if you want inject back into a specific
-pane; otherwise compose stays local.
-
 ### As a split-pane
 
 Inside a tmux session, split a pane and start pinky there:
@@ -120,7 +96,7 @@ bind-key p split-window -h -l 35% -c "#{pane_current_path}" "pinky"
 ```
 
 Pinky works the same regardless of where it's launched — the picker is
-always shown unless `--target` is passed.
+always shown.
 
 ## Keys
 

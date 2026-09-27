@@ -10,9 +10,9 @@ import (
 )
 
 // TestAttach_PopulatesViewportImmediately verifies that after the
-// seeding step the view contains the placeholder. Guards against
-// either path (picker / --target / --session-file) losing the
-// refreshViewport call in a future refactor.
+// seeding step the view contains the placeholder. Guards against a
+// future refactor of the picker path dropping the refreshViewport
+// call before the first user-visible render.
 func TestAttach_PopulatesViewportImmediately(t *testing.T) {
 	m := newModel()
 	m.agents = []session.AgentSession{{Session: "s", Window: "0", Pane: "0", PaneID: "%1", Agent: "pi"}}

@@ -6,7 +6,6 @@ package session
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -45,48 +44,6 @@ const scannerMaxLine = 16 * 1024 * 1024
 type Source interface {
 	NewMessages() ([]Message, error)
 	Close() error
-}
-
-// OpenFile opens a Source from an explicit JSONL path. Used as the
-// --session-file escape hatch when pane-based discovery can't find the
-// file. The format is auto-detected by the first line's `type` field
-// (pi uses "message", codex uses "response_item").
-func OpenFile(path string) (Source, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open session file %q: %w", path, err)
-	}
-	defer f.Close()
-
-	// Read the first non-empty line to detect format.
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), scannerMaxLine)
-	var firstLine []byte
-	for sc.Scan() {
-		firstLine = sc.Bytes()
-		break
-	}
-	if firstLine == nil {
-		return nil, fmt.Errorf("session file %q is empty", path)
-	}
-
-	var raw struct {
-		Type    string `json:"type"`
-		Payload struct {
-			Type string `json:"type"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(firstLine, &raw); err != nil {
-		return nil, fmt.Errorf("session file %q: not valid JSONL: %w", path, err)
-	}
-	switch raw.Type {
-	case "message":
-		return &piSource{path: path}, nil
-	case "response_item":
-		return &codexSource{path: path}, nil
-	default:
-		return nil, fmt.Errorf("session file %q: unrecognized format (type=%q)", path, raw.Type)
-	}
 }
 
 // ErrUnsupportedAgent is returned when the pane's agent isn't pi or codex.

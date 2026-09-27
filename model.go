@@ -110,10 +110,10 @@ type model struct {
 
 	// Latest-message view state. pinky always renders the most recent
 	// assistant message; older messages are not displayed.
-	latest         session.Message
-	blocks         []render.Block
-	wrappedToSrc   []int // viewport yOffset → source-line index, for nav
-	sourceToFirst  []int // source-line index → first wrapped yOffset, for nav
+	latest        session.Message
+	blocks        []render.Block
+	wrappedToSrc  []int // viewport yOffset → source-line index, for nav
+	sourceToFirst []int // source-line index → first wrapped yOffset, for nav
 
 	viewport viewport.Model
 	textarea textarea.Model
@@ -188,8 +188,6 @@ type model struct {
 // newModel returns a picker model. Callers must either call setAgents
 // (then run the picker) or call attach (skip the picker, jump to running).
 
-
-
 // cursorOnScreen returns true when the cursor's rendered line is
 // within the viewport's visible range.
 func (m *model) cursorOnScreen() bool {
@@ -257,11 +255,8 @@ func (m *model) viewportSize() (int, int) {
 	return w, h
 }
 
-// idle is the shared tail of attach/attachWithFile: the view setup
-// (placeholder seed, textareas, comment slice) once source +
-// history are resolved. Source and history come from the caller
-// (session.Open + history.Open for the picker path; session.OpenFile
-// only for --session-file); everything below is identical.
+// idle binds source, history, and view state for the running pane.
+// Called by attach() after session.Open + history.Open resolve.
 func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	ta := textarea.New()
 	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
@@ -288,18 +283,17 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	m.comments = nil
 
 	// Best-effort: record the pane's cwd for the file review tab.
-	// Empty on failure (--session-file path, or no tmux server).
-	if pane != "" && pane != "(explicit)" {
+	// Empty on failure (no tmux server).
+	if pane != "" {
 		if cwd, err := session.PaneCwd(pane); err == nil {
 			m.fileRoot = cwd
 		}
 	}
 }
 
-// attach opens a session source + history for the given pane.
-// Always seeds the viewport via refreshViewport so the placeholder
-// renders immediately — same whether the user used the picker or
-// --target.
+// attach opens a session source + history for the given pane, then
+// hands off to idle(). Seeds the viewport via refreshViewport so the
+// placeholder renders immediately.
 func (m *model) attach(pane string) error {
 	src, err := session.Open(pane)
 	if err != nil {
@@ -311,19 +305,6 @@ func (m *model) attach(pane string) error {
 		return fmt.Errorf("open history: %w", err)
 	}
 	m.idle(src, hist, pane)
-	return nil
-}
-
-// attachWithFile is the --session-file escape hatch: skip pane
-// discovery and use the given JSONL path directly. No history, no
-// pane → compose still works locally but the redirect has nowhere
-// to go.
-func (m *model) attachWithFile(path string) error {
-	src, err := session.OpenFile(path)
-	if err != nil {
-		return err
-	}
-	m.idle(src, nil, "(explicit)")
 	return nil
 }
 
@@ -612,8 +593,6 @@ func (m *model) moveFileCursor(delta int) {
 	}
 	m.fileCursor = min(max(m.fileCursor+delta, 0), n-1)
 }
-
-
 
 // enterCompose transitions to compose mode with the textarea reset
 // and focused. Shared by Ctrl+N and the `c` alias.

@@ -5,23 +5,19 @@
 TBD
 ## Requirements
 ### Requirement: Show session picker at startup
-The system SHALL start by enumerating all tmux panes whose process tree contains a pi or codex agent, and present them in a picker. The user selects one with arrow keys + Enter; pinky then transitions to its running state bound to that pane.
+The system SHALL start by enumerating all tmux panes whose process tree contains a pi or codex agent, and present them in a picker. The user selects one with arrow keys + Enter; pinky then transitions to its running state bound to that pane. There is no flag to bypass the picker — every run starts in the picker.
 
 #### Scenario: Multiple agent sessions found
-- **WHEN** pinky starts without `--target` and two or more tmux panes contain a pi or codex agent
+- **WHEN** pinky starts and two or more tmux panes contain a pi or codex agent
 - **THEN** the picker SHALL list all such sessions with their tmux session name, pane id, and agent name
 
 #### Scenario: Single agent session found
-- **WHEN** pinky starts without `--target` and exactly one tmux pane contains an agent
+- **WHEN** pinky starts and exactly one tmux pane contains an agent
 - **THEN** the picker SHALL show that single entry; user selects it with Enter to proceed
 
 #### Scenario: No agent sessions found
-- **WHEN** pinky starts without `--target` and no tmux pane contains a pi or codex agent
+- **WHEN** pinky starts and no tmux pane contains a pi or codex agent
 - **THEN** pinky SHALL exit with a clear error: "no active pi or codex agents found in any tmux pane"
-
-#### Scenario: --target bypasses the picker
-- **WHEN** pinky starts with `--target <pane-id>`
-- **THEN** the picker SHALL NOT be shown; pinky proceeds directly to running state bound to that pane
 
 #### Scenario: Picker navigation
 - **WHEN** the picker is shown
