@@ -476,22 +476,6 @@ cleared when:
 - **THEN** the hover footer shows the substring before the first
   newline, followed by `…`
 
-### Requirement: Tab indicator in the status bar
-
-The status line SHALL show a small chip ("msg" / "files")
-indicating the active tab. The chip SHALL render in dim style
-and SHALL update whenever `m.tab` changes.
-
-#### Scenario: Status bar shows "msg" in message view
-
-- **WHEN** the TUI is in `stateNav` or `stateCompose`
-- **THEN** the status line contains the `msg` chip
-
-#### Scenario: Status bar shows "files" in file tab
-
-- **WHEN** the TUI is in `stateFileNav` or `stateFileView`
-- **THEN** the status line contains the `files` chip
-
 ### Requirement: File viewer scrolls with a viewport
 The file viewer in `stateFileView` SHALL render the opened file through a
 `bubbles/viewport.Model` whose size matches the message viewport's size

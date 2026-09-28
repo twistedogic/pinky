@@ -2015,12 +2015,22 @@ var visualModeStyle = lipgloss.NewStyle().
 	Bold(true).
 	Padding(0, 1)
 
-// tabChipStyle is the dim accent used for the active-tab chip in
-// the status line ("msg" / "files"). Kept dim so it doesn't
-// compete with the [VISUAL] chip or the pane line.
-var tabChipStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("241")).
-	Padding(0, 1)
+// activeTabStyle / inactiveTabStyle paint the two cells of the
+// top-of-screen tab header (Message / Files). Active cell uses
+// cyan (51) fill to match the gutter focus indicator and the
+// [VISUAL] chip; inactive is dim (241). Replaces the previous
+// status-line `tabChipStyle` which carried the same info with
+// less ink.
+var (
+	activeTabStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("51")).
+			Foreground(lipgloss.Color("232")).
+			Padding(0, 1)
+
+	inactiveTabStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241")).
+				Padding(0, 1)
+)
 
 // dimStyle is the foreground-only dim color used for non-emphatic
 // chrome (header cwd, picker row labels). Same color as
@@ -2263,29 +2273,44 @@ func splitOnSlash(s string, max int) (string, string) {
 // m.width is 0 (pre-WindowSizeMsg).
 func (m *model) headerView() string {
 	width := m.width
+	tabRow := m.tabHeader()
 	if width <= 0 {
 		// ponytail: pre-WindowSizeMsg fallback matches the old
-		// statusLine behavior — return the natural-width content.
-		return m.headerLine(shortenCwd(m.fileRoot, 2), len(m.comments))
+		// statusLine behavior — return the natural-width content
+		// with the tab row on top.
+		return tabRow + "\n" + m.headerLine(shortenCwd(m.fileRoot, 2), len(m.comments))
 	}
 	count := len(m.comments)
 	for _, maxSegs := range headerAbbrevLevels {
-		line := m.headerLine(shortenCwd(m.fileRoot, maxSegs), count)
-		if ansi.StringWidth(line) <= width {
-			return padRight(line, width)
+		cwd := padRight(m.headerLine(shortenCwd(m.fileRoot, maxSegs), count), width)
+		if ansi.StringWidth(cwd) <= width {
+			return tabRow + "\n" + cwd
 		}
 	}
-	// Last resort: split path across two lines; count moves to line 2.
+	// Last resort: split path across two lines; count moves to line 3
+	// (after the tab row).
 	path := shortenCwd(m.fileRoot, 1)
 	if a, b := splitOnSlash(path, width); b != "" {
 		style := pendingIdleStyle
 		if count > 0 {
 			style = pendingArmedStyle
 		}
-		return padRight(dimStyle.Render(a), width) + "\n" +
+		return tabRow + "\n" +
+			padRight(dimStyle.Render(a), width) + "\n" +
 			padRight(style.Render(fmt.Sprintf("%d pending", count)), width)
 	}
-	return padRight(m.headerLine(path, count), width)
+	return tabRow + "\n" + padRight(m.headerLine(path, count), width)
+}
+
+// tabHeader renders the two-cell row above the cwd header. Active
+// cell carries the filled background; inactive is dim. Layout per
+// `tab-header` spec: cell1 (" Message "), one space, cell2
+// (" Files ").
+func (m *model) tabHeader() string {
+	if m.tab == tabFiles {
+		return activeTabStyle.Render("Files") + " " + inactiveTabStyle.Render("Message")
+	}
+	return activeTabStyle.Render("Message") + " " + inactiveTabStyle.Render("Files")
 }
 
 // headerLine builds one row of the header: dim cwd on the left,
@@ -2615,13 +2640,7 @@ func (m model) statusLine() string {
 	if m.nav.Visual == render.NavLine {
 		rendered += visualModeStyle.Render(" VISUAL ")
 	}
-	// Tab chip: always present so the user knows which tab is
-	// active. Dim style keeps it subordinate to the pane line.
-	switch m.tab {
-	case tabFiles:
-		rendered += " " + tabChipStyle.Render(" files ")
-	default:
-		rendered += " " + tabChipStyle.Render(" msg ")
-	}
+	// Tab indicator moved to the top-of-screen `tabHeader()` row;
+	// the status line no longer carries a tab chip.
 	return padRight(rendered, m.width)
 }
