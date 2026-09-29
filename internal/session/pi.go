@@ -167,8 +167,6 @@ func (s *piSource) NewMessages() ([]Message, error) {
 	return out, sc.Err()
 }
 
-func (s *piSource) Close() error { return nil }
-
 // extractPi pulls assistant text and user text out of a pi message.
 // pi's `content` field is polymorphic: string for some messages,
 // array of typed blocks for others. We handle both.

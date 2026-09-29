@@ -2,12 +2,10 @@ package render
 
 import "strings"
 
-// FileLine maps a single rendered line index to its 1-based source
-// line number and whether any file-kind comment's line range
-// covers it (inline char selections are not surfaced as line-level
-// highlights in v0).
+// FileLine tracks whether a source line falls inside any file-kind
+// comment's line range. Index in the slice matches the 1-based line
+// number (slice[0] == line 1). Block-kind comments are ignored.
 type FileLine struct {
-	LineNo    int
 	HasComment bool
 }
 
@@ -21,17 +19,13 @@ func MarkLines(content string, comments []Comment) []FileLine {
 		lines = lines[:len(lines)-1]
 	}
 	out := make([]FileLine, len(lines))
-	covered := make(map[int]bool, len(lines))
 	for _, c := range comments {
 		if c.Kind != CommentFile || c.LineStart <= 0 {
 			continue
 		}
 		for ln := c.LineStart; ln <= c.LineEnd && ln <= len(lines); ln++ {
-			covered[ln] = true
+			out[ln-1].HasComment = true
 		}
-	}
-	for i := range out {
-		out[i] = FileLine{LineNo: i + 1, HasComment: covered[i+1]}
 	}
 	return out
 }

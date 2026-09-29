@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -253,7 +254,7 @@ func TestFileView_DidOpenOnEnter(t *testing.T) {
 	fm := &fakeLSPManager{}
 	m.lsp = fm
 	openFile(t, m, "src/main.go")
-	if !contains(fm.calls, "DidOpen") {
+	if !slices.Contains(fm.calls, "DidOpen") {
 		t.Errorf("expected DidOpen in calls; got %v", fm.calls)
 	}
 }
@@ -266,20 +267,9 @@ func TestFileView_DidCloseOnEsc(t *testing.T) {
 	// Esc to dir nav triggers exitFileViewer, which sends DidClose.
 	upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updatedModelPtr(upd)
-	if !contains(fm.calls, "DidClose") {
+	if !slices.Contains(fm.calls, "DidClose") {
 		t.Errorf("expected DidClose in calls; got %v", fm.calls)
 	}
-}
-
-// contains is a tiny linear-search helper for string slices; used
-// to assert method-call ordering without dragging in slices.
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 // TestLSPPicker_JumpsOnSameFile: pressing Enter on a same-file

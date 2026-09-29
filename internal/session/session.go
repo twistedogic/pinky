@@ -43,7 +43,6 @@ const scannerMaxLine = 16 * 1024 * 1024
 // content appended since the previous call (or since Open).
 type Source interface {
 	NewMessages() ([]Message, error)
-	Close() error
 }
 
 // ErrUnsupportedAgent is returned when the pane's agent isn't pi or codex.

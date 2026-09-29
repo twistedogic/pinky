@@ -379,7 +379,6 @@ func (m *model) attach(pane string) error {
 	}
 	hist, err := history.Open(pane)
 	if err != nil {
-		_ = src.Close()
 		return fmt.Errorf("open history: %w", err)
 	}
 	m.idle(src, hist, pane)
@@ -1087,7 +1086,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case render.ActionExitVisual:
 			m.refreshViewport()
 		case render.ActionComment:
-			m.enterCommentComposer(buildCommentAnchor(&m.nav, &m.cursor, &m.selection, m.blocks))
+			m.enterCommentComposer(buildCommentAnchor(m.nav.Visual, &m.cursor, &m.selection, m.blocks))
 		case render.ActionSend:
 			m.handleSend()
 		case render.ActionRefresh:
@@ -1705,16 +1704,6 @@ func isWordByte(b byte) bool {
 		(b >= '0' && b <= '9') || b == '_'
 }
 
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
 // exitFileViewer leaves stateFileView, sends didClose for the
 // current path, and clears transient LSP state. Called from
 // handleFileViewKey on Esc / Tab. The LSP close is best-effort;
@@ -1852,8 +1841,8 @@ func (m *model) openFileComment() {
 // no-visual branch uses charA=charC=-1 to signal whole-block (not
 // inline byte-0) so the appendix emits marker=`block`, not
 // marker=`inline`.
-func buildCommentAnchor(st *render.NavState, cur *render.NavCursor, sel *render.NavSelection, blocks []render.Block) commentAnchor {
-	if st.Visual == render.NavLine {
+func buildCommentAnchor(visual render.NavMode, cur *render.NavCursor, sel *render.NavSelection, blocks []render.Block) commentAnchor {
+	if visual == render.NavLine {
 		idx := sel.BlockIdx
 		if idx < 0 || idx >= len(blocks) {
 			idx = cur.BlockIdx

@@ -17,10 +17,10 @@ func TestMarkLines_FileKindCommentsCovered(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("expected 4 FileLine entries; got %d", len(lines))
 	}
-	for _, l := range lines {
-		want := l.LineNo == 2 || l.LineNo == 3
+	for i, l := range lines {
+		want := i == 1 || i == 2 // 0-based: lines 2 and 3
 		if l.HasComment != want {
-			t.Errorf("line %d: HasComment = %v, want %v", l.LineNo, l.HasComment, want)
+			t.Errorf("line %d: HasComment = %v, want %v", i+1, l.HasComment, want)
 		}
 	}
 }
@@ -34,9 +34,9 @@ func TestMarkLines_IgnoresBlockKindComments(t *testing.T) {
 			CreatedAt: time.Now()},
 	}
 	lines := MarkLines(content, comments)
-	for _, l := range lines {
+	for i, l := range lines {
 		if l.HasComment {
-			t.Errorf("block-kind comment marked file line %d", l.LineNo)
+			t.Errorf("block-kind comment marked file line %d", i+1)
 		}
 	}
 }
@@ -48,9 +48,9 @@ func TestMarkLines_NoComments(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("expected 3 lines; got %d", len(lines))
 	}
-	for _, l := range lines {
+	for i, l := range lines {
 		if l.HasComment {
-			t.Errorf("line %d unexpectedly marked", l.LineNo)
+			t.Errorf("line %d unexpectedly marked", i+1)
 		}
 	}
 }

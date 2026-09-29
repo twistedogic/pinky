@@ -29,20 +29,15 @@ func TestBridge_SupersededRequestDropped(t *testing.T) {
 
 // TestBridge_ChannelClosedIsSilent: closing the manager's
 // requests channel with no matching reply produces a LocationsMsg
-// with an Err field, but not a panic. The model treats that as
-// silent (no definition / references to show).
+// (the model treats it as silent regardless of Err).
 func TestBridge_ChannelClosedIsSilent(t *testing.T) {
 	m := New(t.TempDir())
 	close(m.requests)
 	b := NewBridge(m)
 	cmd := b.waitForLocations(KindReferences, 42)
 	msg := cmd()
-	loc, ok := msg.(LocationsMsg)
-	if !ok {
+	if _, ok := msg.(LocationsMsg); !ok {
 		t.Fatalf("expected LocationsMsg on channel close; got %T", msg)
-	}
-	if loc.Err == nil {
-		t.Errorf("expected non-nil Err on channel close")
 	}
 }
 

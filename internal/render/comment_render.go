@@ -4,9 +4,42 @@ import (
 	"cmp"
 	"slices"
 	"strings"
-
-	"github.com/muesli/reflow/wordwrap"
 )
+
+// wordWrap breaks s into lines no wider than width, splitting on
+// whitespace. Input is plain text (rendered markdown, no ANSI),
+// so a stdlib word-wrap suffices. words longer than width are
+// placed on their own line unbroken. Newlines in s are preserved.
+func wordWrap(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	var b strings.Builder
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		col := 0
+		for j, word := range strings.Fields(line) {
+			w := len(word)
+			switch {
+			case col == 0:
+				b.WriteString(word)
+				col = w
+			case col+1+w <= width:
+				b.WriteByte(' ')
+				b.WriteString(word)
+				col += 1 + w
+			default:
+				b.WriteByte('\n')
+				b.WriteString(word)
+				col = w
+			}
+			_ = j
+		}
+	}
+	return b.String()
+}
 
 // footnote is one comment's footnote line, ready to be injected
 // after the block it annotates.
@@ -91,7 +124,7 @@ func InjectGutterWrapped(rendered string, blocks []Block, focused int, wrapWidth
 	for i, sl := range sourceLines {
 		var wrapped string
 		if wrapWidth > 0 {
-			wrapped = wordwrap.String(sl, wrapWidth)
+			wrapped = wordWrap(sl, wrapWidth)
 		} else {
 			wrapped = sl
 		}

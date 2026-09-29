@@ -181,8 +181,6 @@ func (s *codexSource) NewMessages() ([]Message, error) {
 	return out, sc.Err()
 }
 
-func (s *codexSource) Close() error { return nil }
-
 // codexEntry mirrors codex rollout JSONL lines.
 type codexEntry struct {
 	Type      string         `json:"type"`

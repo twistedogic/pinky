@@ -2,10 +2,8 @@ package lsp
 
 import (
 	"context"
-	"errors"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
 )
 
 // Bridge glues the Manager's async result channel into Bubble
@@ -70,7 +68,7 @@ func (b *Bridge) waitForLocations(kind Kind, id int64) tea.Cmd {
 		for {
 			res, ok := <-b.mgr.Requests()
 			if !ok {
-				return LocationsMsg{Err: errChannelClosed}
+				return LocationsMsg{}
 			}
 			if res.ID != id {
 				continue // superseded
@@ -93,7 +91,7 @@ func (b *Bridge) waitForHover(_ Kind, id int64) tea.Cmd {
 		for {
 			res, ok := <-b.mgr.Requests()
 			if !ok {
-				return HoverMsg{Err: errChannelClosed}
+				return HoverMsg{}
 			}
 			if res.ID != id {
 				continue
@@ -103,7 +101,6 @@ func (b *Bridge) waitForHover(_ Kind, id int64) tea.Cmd {
 			}
 			return HoverMsg{
 				Contents:      res.Hover.Contents.Value,
-				Range:         res.Hover.Range,
 				Err:           res.Err,
 				ServerMissing: res.ErrServerMissing,
 				InstallHint:   res.InstallHint,
@@ -129,13 +126,7 @@ type LocationsMsg struct {
 // Contents is empty the model treats the reply as silent.
 type HoverMsg struct {
 	Contents      string
-	Range         protocol.Range
 	Err           error
 	ServerMissing bool
 	InstallHint   string
 }
-
-// errChannelClosed is returned when the manager's result channel
-// is closed before our id arrives. The model treats it as a
-// silent no-op.
-var errChannelClosed = errors.New("LSP result channel closed")
