@@ -2623,7 +2623,7 @@ func spliceInvert(selected string, start, end int) string {
 }
 
 const (
-	selectionANSI  = "\x1b[38;5;51m"
+	selectionANSI  = "\x1b[7m"
 	resetANSI      = "\x1b[0m"
 	cursorInvertOn = "\x1b[7m"
 	cursorInvertOff = "\x1b[27m"

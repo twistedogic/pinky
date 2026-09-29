@@ -573,13 +573,16 @@ func TestFileView_EndLandsAtBottom(t *testing.T) {
 }
 
 // TestFileView_VTogglesHighlight: pressing `v` then `l` must
-// make the viewport content include the cyan selection highlight.
+// make the viewport content include the inverted-background
+// selection highlight. The selection wraps its byte range with
+// \x1b[7m ... \x1b[0m; the cursor uses \x1b[7m ... \x1b[27m,
+// so we look for the selection's full-reset byte to distinguish.
 func TestFileView_VTogglesHighlight(t *testing.T) {
 	root, rel := longFileFixture(t, 3)
 	m := openFileInFixture(t, root, rel)
 	before := m.fileViewer.viewport.View()
-	if strings.Contains(before, "\x1b[38;5;51m") {
-		t.Fatalf("setup: highlight already present before `v`")
+	if strings.Count(before, "\x1b[0m") != 0 {
+		t.Fatalf("setup: selection reset already present before `v`")
 	}
 	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	mv := upd.(model)
@@ -592,14 +595,15 @@ func TestFileView_VTogglesHighlight(t *testing.T) {
 		t.Fatalf("setup: `l` should have advanced charPos from 0")
 	}
 	after := mv.fileViewer.viewport.View()
-	if !strings.Contains(after, "\x1b[38;5;51m") {
-		t.Errorf("expected cyan selection highlight after `v` then `l`; got:\n%s", after)
+	if strings.Count(after, "\x1b[0m") == 0 {
+		t.Errorf("expected inverted-bg selection highlight after `v` then `l`; got:\n%s", after)
 	}
 }
 
 // TestFileView_EscClearsVisualHighlight: pressing `v` then `l`
 // to make a non-degenerate selection, then Esc, must remove the
-// cyan selection highlight from the viewport's cached content.
+// inverted-bg selection highlight from the viewport's cached
+// content.
 func TestFileView_EscClearsVisualHighlight(t *testing.T) {
 	root, rel := longFileFixture(t, 3)
 	m := openFileInFixture(t, root, rel)
@@ -607,16 +611,16 @@ func TestFileView_EscClearsVisualHighlight(t *testing.T) {
 	mv := upd.(model)
 	upd, _ = mv.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	mv = upd.(model)
-	if !strings.Contains(mv.fileViewer.viewport.View(), "\x1b[38;5;51m") {
-		t.Fatalf("setup: highlight should be present after `v` then `l`")
+	if strings.Count(mv.fileViewer.viewport.View(), "\x1b[0m") == 0 {
+		t.Fatalf("setup: selection reset should be present after `v` then `l`")
 	}
 	upd, _ = mv.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	mv = upd.(model)
 	if mv.fileViewer.visual.Active {
 		t.Fatalf("visual mode should be inactive after Esc")
 	}
-	if strings.Contains(mv.fileViewer.viewport.View(), "\x1b[38;5;51m") {
-		t.Errorf("expected cyan highlight cleared after Esc; got:\n%s",
+	if strings.Count(mv.fileViewer.viewport.View(), "\x1b[0m") != 0 {
+		t.Errorf("expected inverted highlight cleared after Esc; got:\n%s",
 			mv.fileViewer.viewport.View())
 	}
 }
@@ -634,8 +638,8 @@ func TestFileView_LMovesVisualHighlight(t *testing.T) {
 		t.Fatalf("setup: `l` should have advanced charPos from 0")
 	}
 	view := mv.fileViewer.viewport.View()
-	if !strings.Contains(view, "\x1b[38;5;51m") {
-		t.Errorf("expected cyan highlight after `l`; got:\n%s", view)
+	if strings.Count(view, "\x1b[0m") == 0 {
+		t.Errorf("expected inverted highlight after `l`; got:\n%s", view)
 	}
 }
 
