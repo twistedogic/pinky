@@ -48,6 +48,8 @@ type keyMap struct {
 	// File view (stateFileView).
 	FileViewUp         key.Binding // k, ↑
 	FileViewDown       key.Binding // j, ↓
+	FileViewLeft       key.Binding // h
+	FileViewRight      key.Binding // l
 	FileViewVisual     key.Binding // v
 	FileViewComment    key.Binding // c
 	FileViewDefinition key.Binding // d
@@ -182,13 +184,21 @@ var defaultKeyMap = keyMap{
 		key.WithKeys("j", "down"),
 		key.WithHelp("↓/j", "down"),
 	),
+	FileViewLeft: key.NewBinding(
+		key.WithKeys("h"),
+		key.WithHelp("h", "rune left"),
+	),
+	FileViewRight: key.NewBinding(
+		key.WithKeys("l"),
+		key.WithHelp("l", "rune right"),
+	),
 	FileViewVisual: key.NewBinding(
 		key.WithKeys("v"),
 		key.WithHelp("v", "visual"),
 	),
 	FileViewComment: key.NewBinding(
 		key.WithKeys("c"),
-		key.WithHelp("c", "comment"),
+		key.WithHelp("c", "comment line"),
 	),
 	FileViewBack: key.NewBinding(
 		key.WithKeys("esc"),
@@ -196,15 +206,15 @@ var defaultKeyMap = keyMap{
 	),
 	FileViewDefinition: key.NewBinding(
 		key.WithKeys("d"),
-		key.WithHelp("d", "definition"),
+		key.WithHelp("d", "def word"),
 	),
 	FileViewReferences: key.NewBinding(
 		key.WithKeys("R"),
-		key.WithHelp("R", "references"),
+		key.WithHelp("R", "refs word"),
 	),
 	FileViewHover: key.NewBinding(
 		key.WithKeys("K"),
-		key.WithHelp("K", "hover"),
+		key.WithHelp("K", "hover word"),
 	),
 
 	// Compose

@@ -255,12 +255,18 @@ func TestFileNav_OpenFileOpensViewer(t *testing.T) {
 	}
 }
 
-// TestFileView_CommentWholeFile: in the file viewer, pressing `c`
-// then typing + Enter saves a file-kind comment covering the
-// whole file (line range 1..N).
-func TestFileView_CommentWholeFile(t *testing.T) {
+// TestFileView_CommentWholeLine: in the file viewer with no
+// visual active, pressing `c` then typing + Enter saves a
+// file-kind comment covering the current line (single-line
+// range). The previous "whole file" semantics (lines 1..N)
+// were dropped in the file-viewer vim-cursor change; whole-file
+// feedback reaches the agent through the compose path.
+func TestFileView_CommentWholeLine(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
+	if m.fileViewer.cursor != 1 {
+		t.Fatalf("setup: cursor should start at 1; got %d", m.fileViewer.cursor)
+	}
 
 	c := tea.KeyPressMsg{Code: 'c', Text: "c"}
 	updated, _ := m.Update(c)
@@ -283,8 +289,11 @@ func TestFileView_CommentWholeFile(t *testing.T) {
 	if c0.Path != "src/main.go" {
 		t.Errorf("expected Path=src/main.go; got %q", c0.Path)
 	}
-	if c0.LineStart != 1 || c0.LineEnd != 3 {
-		t.Errorf("expected line range 1-3; got %d-%d", c0.LineStart, c0.LineEnd)
+	if c0.LineStart != 1 || c0.LineEnd != 1 {
+		t.Errorf("expected line range 1-1 (current line); got %d-%d", c0.LineStart, c0.LineEnd)
+	}
+	if c0.CharStart != -1 || c0.CharEnd != -1 {
+		t.Errorf("expected char range -1/-1 (no inline); got %d/%d", c0.CharStart, c0.CharEnd)
 	}
 }
 
@@ -579,8 +588,8 @@ func TestFileView_VTogglesHighlight(t *testing.T) {
 	}
 	upd, _ = mv.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	mv = upd.(model)
-	if mv.fileViewer.visual.CharC == 0 {
-		t.Fatalf("setup: `l` should have advanced CharC from 0")
+	if mv.fileViewer.charPos == 0 {
+		t.Fatalf("setup: `l` should have advanced charPos from 0")
 	}
 	after := mv.fileViewer.viewport.View()
 	if !strings.Contains(after, "\x1b[38;5;51m") {
@@ -621,8 +630,8 @@ func TestFileView_LMovesVisualHighlight(t *testing.T) {
 	mv := upd.(model)
 	upd, _ = mv.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	mv = upd.(model)
-	if mv.fileViewer.visual.CharC == 0 {
-		t.Fatalf("setup: `l` should have advanced CharC from 0")
+	if mv.fileViewer.charPos == 0 {
+		t.Fatalf("setup: `l` should have advanced charPos from 0")
 	}
 	view := mv.fileViewer.viewport.View()
 	if !strings.Contains(view, "\x1b[38;5;51m") {
@@ -653,41 +662,42 @@ func TestFileView_NewCommentShowsYellowGutter(t *testing.T) {
 	}
 }
 
-// TestFileView_CursorGutterFollowsCursor: every refresh paints a
-// green ▍ selector gutter on the cursor's line. Moving the cursor
-// moves the gutter.
-func TestFileView_CursorGutterFollowsCursor(t *testing.T) {
-	const green = "\x1b[38;5;42m"
+// TestFileView_CursorRendersInlineAtCharPos: every refresh paints
+// an inline block cursor (inverted background ANSI) at the
+// cursor's (line, charPos). Moving the cursor moves the invert
+// span. The yellow comment gutter remains, but the cursor no
+// longer gets a separate gutter.
+func TestFileView_CursorRendersInlineAtCharPos(t *testing.T) {
+	const invertOn = "\x1b[7m"
+	const invertOff = "\x1b[27m"
 	m := *attachFileFixture(t)
 	openFile(t, &m, "src/main.go")
-	if m.fileViewer.cursor != 1 {
-		t.Fatalf("setup: cursor should start at 1; got %d", m.fileViewer.cursor)
-	}
+	// File content: "alpha\nbeta\ngamma\n" — line 1 is "alpha" and
+	// the cursor lands at byte 0 (the `a`).
 	view := m.fileViewer.viewport.View()
-	lines := strings.Split(view, "\n")
-	if len(lines) == 0 || !strings.HasPrefix(lines[0], green+"▍") {
-		t.Errorf("expected green ▍ selector gutter at start of viewport; got first 80 chars:\n%q",
+	if !strings.Contains(view, invertOn+"a"+invertOff) {
+		t.Errorf("expected inverted `a` at the start of line 1; got first 80 chars:\n%q",
 			view[:min(80, len(view))])
 	}
 
-	// Move cursor down; the gutter must move with it.
+	// Move cursor down: the inverted rune should now be on line 2
+	// (`b`), and line 1 should be plain.
 	upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = upd.(model)
 	if m.fileViewer.cursor != 2 {
 		t.Fatalf("after j: cursor should be 2; got %d", m.fileViewer.cursor)
 	}
 	view = m.fileViewer.viewport.View()
-	lines = strings.Split(view, "\n")
+	lines := strings.Split(view, "\n")
 	if len(lines) < 2 {
 		t.Fatalf("viewport too short to test line 2; got %d lines", len(lines))
 	}
-	// Line 1 no longer has the gutter, line 2 does.
-	if strings.HasPrefix(lines[0], green+"▍") {
-		t.Errorf("after j: line 1 should no longer have gutter; got first 60 chars:\n%q",
+	if strings.Contains(lines[0], invertOn+"a"+invertOff) {
+		t.Errorf("after j: line 1 should no longer invert `a`; got first 60 chars:\n%q",
 			lines[0][:min(60, len(lines[0]))])
 	}
-	if !strings.HasPrefix(lines[1], green+"▍") {
-		t.Errorf("after j: line 2 should have green ▍ gutter; got first 60 chars:\n%q",
+	if !strings.Contains(lines[1], invertOn+"b"+invertOff) {
+		t.Errorf("after j: line 2 should invert `b`; got first 60 chars:\n%q",
 			lines[1][:min(60, len(lines[1]))])
 	}
 }

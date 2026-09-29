@@ -22,7 +22,8 @@ func initCommentTAForTest(m *model) {
 // TestFileViewer_ColumnCursor_ClampsAtLineEnd: pressing `j` to
 // a shorter line clamps charPos to the new line's byte length.
 // Spec D3 / scenario "j clamps the column when the new line is
-// shorter".
+// shorter". `preferred` must also be set so j/k consult the right
+// target; the test sets preferred=5 directly.
 func TestFileViewer_ColumnCursor_ClampsAtLineEnd(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
@@ -30,10 +31,14 @@ func TestFileViewer_ColumnCursor_ClampsAtLineEnd(t *testing.T) {
 	// "beta" has 4. Move cursor to col 5 on line 1 then `j` to
 	// land on "beta": charPos should clamp to 4.
 	m.fileViewer.charPos = 5
+	m.fileViewer.preferred = 5
 	upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updatedModelPtr(upd)
 	if m.fileViewer.charPos != 4 {
 		t.Errorf("after j (alpha→beta): charPos = %d; want 4", m.fileViewer.charPos)
+	}
+	if m.fileViewer.preferred != 5 {
+		t.Errorf("after j: preferred = %d; want 5 (unchanged)", m.fileViewer.preferred)
 	}
 }
 
@@ -44,6 +49,7 @@ func TestFileViewer_ColumnCursor_PreservedAcrossLineMove(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
 	m.fileViewer.charPos = 3
+	m.fileViewer.preferred = 3
 	upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updatedModelPtr(upd)
 	// "beta" (4 bytes) and "gamma" (5 bytes) both have ≥3 bytes,
@@ -75,9 +81,6 @@ func TestFileViewer_ColumnCursor_PreservesVisualRange(t *testing.T) {
 	m = updatedModelPtr(upd)
 	if m.fileViewer.charPos != 2 {
 		t.Errorf("after l in visual: charPos = %d; want 2", m.fileViewer.charPos)
-	}
-	if m.fileViewer.visual.CharC != 2 {
-		t.Errorf("after l in visual: visual.CharC = %d; want 2", m.fileViewer.visual.CharC)
 	}
 }
 

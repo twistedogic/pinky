@@ -146,27 +146,31 @@ to the message view, restoring the sub-state you left.
 
 | Key | Action |
 |---|---|
-| `j` / `↓` | Next line (visual: extend line range); column cursor clamps to the new line's length |
-| `k` / `↑` | Previous line (visual: retract line range); column cursor clamps to the new line's length |
-| `h` / `l` | Move the column cursor one rune (visual: also extend `CharC`); always active |
-| `v` | Enter / exit visual selection |
-| `c` | Open the comment composer (whole file when no selection; line range or inline char range when visual is active) |
-| `d` | Go to definition at `(line, charPos)` — jumps on 1 result, picker on N>1, silent on 0 |
-| `R` | Find references at `(line, charPos)` — picker on N≥1, silent on 0 |
-| `K` | Hover at `(line, charPos)` — footer line until the next key press |
+| `j` / `↓` | Move the line cursor down; column cursor becomes `min(preferred, len(newLine))`; `preferred` survives the move |
+| `k` / `↑` | Move the line cursor up; same column rule as `j` |
+| `h` | Move the column cursor one rune left; `preferred` unchanged |
+| `l` | Move the column cursor one rune right; `preferred` tracks the rightmost column reached |
+| `v` | Enter / exit char visual selection at the cursor (anchor = cursor); `j`/`k`/`h`/`l` extend the selection across lines / chars |
+| `c` | No visual -> comment the current line. Visual active: file-inline on single-line selection, file line-range on multi-line selection. |
+| `d` | LSP definition at the **word under the cursor** — jumps on 1 result, picker on N>1, silent on 0 |
+| `R` | LSP references at the **word under the cursor** — picker on N≥1, silent on 0 |
+| `K` | LSP hover at the **word under the cursor** — footer line until the next key press |
 | `s` | Send all accumulated comments |
-| `Esc` | Return to the dir navigator (also clears hover / visual) |
-| `Tab` | Switch to the message view |
-| `q` | Quit pinky |
+| `Esc` | Exit visual if active; otherwise return to the dir navigator |
+| `Tab` | Switch to the message view (visual is preserved across the round-trip) |
+| `q` | Quit pinky (visual is discarded) |
 | `?` | Toggle the keymap page |
 
-Lines that carry at least one file-kind comment show a yellow
-`▍` in the left gutter; the active visual selection shows a
-cyan highlight on the byte range that `c` will anchor against.
-`d` / `R` / `K` speak Language Server Protocol (LSP); the
-server binary is detected from the file extension and lazily
-spawned on first use, so the first query for a new language
-takes ~1 s and a missing server shows a one-line install hint.
+The file viewer's cursor renders as an inline block (inverted
+background) at the exact byte position, not as a left-gutter
+marker. Lines covered by a file-kind comment show a yellow `▍`
+in the left gutter. The active visual selection highlights the
+covered byte range in cyan, with interior lines of a multi-line
+selection fully highlighted. `d` / `R` / `K` speak Language
+Server Protocol (LSP); the server binary is detected from the
+file extension and lazily spawned on first use, so the first
+query for a new language takes ~1 s and a missing server shows
+a one-line install hint.
 
 ### Compose
 

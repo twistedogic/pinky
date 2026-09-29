@@ -40,22 +40,31 @@ func (f *fakeLSPManager) Shutdown(_ context.Context)                 { f.record(
 // fakeBridge records d / R / K keypress routing into the bridge.
 // The model layer only calls RequestDefinition / RequestReferences
 // / RequestHover; this satisfies the lspBridge interface.
+// Ponytail: the last (path, line, char) tuple is captured so
+// tests can assert the bridge was called at the word under the
+// cursor, not at the cursor's exact charPos.
 type fakeBridge struct {
 	defCalls   int
 	refCalls   int
 	hoverCalls int
+	lastPath   string
+	lastLine   int
+	lastChar   int
 }
 
-func (b *fakeBridge) RequestDefinition(_ context.Context, _ string, _, _ int) tea.Cmd {
+func (b *fakeBridge) RequestDefinition(_ context.Context, path string, line, char int) tea.Cmd {
 	b.defCalls++
+	b.lastPath, b.lastLine, b.lastChar = path, line, char
 	return nil
 }
-func (b *fakeBridge) RequestReferences(_ context.Context, _ string, _, _ int) tea.Cmd {
+func (b *fakeBridge) RequestReferences(_ context.Context, path string, line, char int) tea.Cmd {
 	b.refCalls++
+	b.lastPath, b.lastLine, b.lastChar = path, line, char
 	return nil
 }
-func (b *fakeBridge) RequestHover(_ context.Context, _ string, _, _ int) tea.Cmd {
+func (b *fakeBridge) RequestHover(_ context.Context, path string, line, char int) tea.Cmd {
 	b.hoverCalls++
+	b.lastPath, b.lastLine, b.lastChar = path, line, char
 	return nil
 }
 
@@ -374,5 +383,58 @@ func TestFileView_D_R_K_RoutingKeys(t *testing.T) {
 	_, _ = m.Update(tea.KeyPressMsg{Code: 'K', Text: "K"})
 	if fb.hoverCalls != 1 {
 		t.Errorf("after K: hoverCalls = %d; want 1", fb.hoverCalls)
+	}
+}
+
+// TestFileView_D_FiresAtWordUnderCursor: with the cursor on
+// the middle of an identifier, `d` fires the bridge at the
+// identifier's start byte — not the cursor's exact position.
+// File content is "alpha\nbeta\ngamma\n"; with cursor advanced
+// 3 bytes into line 1 (on 'h' of "alpha"), the bridge should see
+// (line=1, char=0). Spec D4 / scenario "`d` on a word with
+// one definition jumps" (word-routing semantics).
+func TestFileView_D_FiresAtWordUnderCursor(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	fb := &fakeBridge{}
+	m.lsphub = fb
+	// Move cursor 3 bytes into line 1 (on 'h' of "alpha").
+	for range 3 {
+		upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+		m = updatedModelPtr(upd)
+	}
+	if m.fileViewer.charPos != 3 {
+		t.Fatalf("setup: charPos = %d; want 3", m.fileViewer.charPos)
+	}
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if fb.defCalls != 1 {
+		t.Fatalf("after d: defCalls = %d; want 1", fb.defCalls)
+	}
+	if fb.lastLine != 1 || fb.lastChar != 0 {
+		t.Errorf("after d at (1, 3): bridge got (line=%d, char=%d); want (1, 0) (start of 'alpha')",
+			fb.lastLine, fb.lastChar)
+	}
+}
+
+// TestFileView_D_OnWhitespaceFiresAtCharPos: cursor on
+// whitespace, `d` fires at the exact charPos (no nearest-word
+// search). The server is expected to return 0 results.
+func TestFileView_D_OnWhitespaceFiresAtCharPos(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	fb := &fakeBridge{}
+	m.lsphub = fb
+	// Move cursor 5 bytes in (the newline at end of line 1).
+	for range 5 {
+		upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+		m = updatedModelPtr(upd)
+	}
+	// charPos is clamped to len("alpha") = 5; newline not in line.
+	if m.fileViewer.charPos != 5 {
+		t.Fatalf("setup: charPos = %d; want 5 (line end)", m.fileViewer.charPos)
+	}
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if fb.lastChar != 5 {
+		t.Errorf("after d at line end: bridge char = %d; want 5 (charPos unchanged)", fb.lastChar)
 	}
 }

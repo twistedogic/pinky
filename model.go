@@ -76,13 +76,16 @@ const (
 	tabFiles
 )
 
-// fileSelection is the file viewer's visual selection range. All
-// values are 1-based; LineA/LineC index source lines, CharA/CharC
-// are byte offsets into the corresponding line.
+// fileSelection is the file viewer's visual selection range. The
+// "moving end" of the selection is the file viewer's cursor
+// (`cursor`, `charPos`); this struct stores only the anchor at the
+// other end plus the mode flag. All values are 1-based; LineA is
+// the anchor line, CharA is the byte offset into that line.
 type fileSelection struct {
-	LineA, CharA int
-	LineC, CharC int
-	Active       bool
+	Active bool
+	Mode   byte // 'c' for char visual (v0 only)
+	LineA  int
+	CharA  int
 }
 
 // lspPickerState holds the locations being shown by the LSP
@@ -122,14 +125,17 @@ type lspBridge interface {
 
 // fileViewer holds the state for stateFileView: the raw content,
 // the line index (parallel to lines, drives gutter flags), the
-// cursor (line + char), an optional visual selection, and the
-// viewport that scrolls the rendered content.
+// cursor (line + char) with the preferred-column tracker for
+// j/k, an optional visual selection whose anchor lives in `visual`
+// and whose moving end is the cursor, and the viewport that
+// scrolls the rendered content.
 type fileViewer struct {
 	path      string
 	content   string
 	lines     []string // raw lines, no trailing newline
-	cursor    int      // 1-based line index
-	charPos   int      // ponytail: byte offset into cursor line; LSP queries at (cursor, charPos)
+	cursor    int      // 1-based line index; LSP target; visual moving end
+	charPos   int      // ponytail: byte offset into cursor line (rune-aligned)
+	preferred int      // last intended column, survives j/k
 	visual    fileSelection
 	lineIndex []render.FileLine // parallel to lines
 	viewport  viewport.Model    // ponytail: scrollable view of the rendered file
@@ -949,7 +955,10 @@ func (m *model) saveBlockComment(a commentAnchor, text string) {
 }
 
 // saveFileComment handles file-kind anchors: whole-file line-range
-// (charA < 0) or inline byte-range (charA >= 0) comments.
+// (charA < 0) or inline byte-range (charA >= 0) comments. The
+// charA/charC byte range is line-relative (anchored to
+// lineStart), not file-relative — file-level offsets would slice
+// across newlines.
 func (m *model) saveFileComment(a commentAnchor, text string) {
 	if a.filePath == "" {
 		m.cancelCommentComposer()
@@ -962,16 +971,20 @@ func (m *model) saveFileComment(a commentAnchor, text string) {
 		if cs > ce {
 			cs, ce = ce, cs
 		}
-		if cs < 0 {
-			cs = 0
+		lineIdx := a.lineStart - 1
+		if lineIdx >= 0 && lineIdx < len(m.fileViewer.lines) {
+			line := m.fileViewer.lines[lineIdx]
+			if cs < 0 {
+				cs = 0
+			}
+			if cs > len(line) {
+				cs = len(line)
+			}
+			if ce > len(line) {
+				ce = len(line)
+			}
+			src = line[cs:ce]
 		}
-		if cs > len(m.fileViewer.content) {
-			cs = len(m.fileViewer.content)
-		}
-		if ce > len(m.fileViewer.content) {
-			ce = len(m.fileViewer.content)
-		}
-		src = m.fileViewer.content[cs:ce]
 	}
 	c := render.Comment{
 		Kind:      render.CommentFile,
@@ -1332,7 +1345,8 @@ func (m *model) openFileViewer(path string) {
 		lines:     strings.Split(strings.TrimRight(content, "\n"), "\n"),
 		cursor:    1,
 		charPos:   0,
-		visual:    fileSelection{LineA: 1, CharA: 0, LineC: 1, CharC: 0},
+		preferred: 0,
+		visual:    fileSelection{Mode: 'c', LineA: 1, CharA: 0},
 		lineIndex: render.MarkLines(content, m.fileCommentsFor(path)),
 		viewport:  viewport.New(viewport.WithWidth(w), viewport.WithHeight(h)),
 	}
@@ -1394,11 +1408,11 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case isKeyRune(msg, 'v'):
 		m.fileViewer.visual.Active = !m.fileViewer.visual.Active
 		if m.fileViewer.visual.Active {
-			line := m.fileViewer.cursor
-			m.fileViewer.visual.LineA = line
-			m.fileViewer.visual.CharA = 0
-			m.fileViewer.visual.LineC = line
-			m.fileViewer.visual.CharC = 0
+			// anchor at the current cursor; the moving end is the
+			// cursor itself, so nothing else needs to be seeded.
+			m.fileViewer.visual.Mode = 'c'
+			m.fileViewer.visual.LineA = m.fileViewer.cursor
+			m.fileViewer.visual.CharA = m.fileViewer.charPos
 		}
 		m.refreshFileView()
 		return m, nil
@@ -1530,33 +1544,49 @@ func (m *model) dismissLSPPicker() {
 	m.reflow()
 }
 
-// fileViewMoveLine moves the cursor line by delta, extending the
-// visual selection if active (charA snaps to 0, charC snaps to the
-// end of the destination line). After the move the file viewport
-// is scrolled so the cursor stays visible (1-line cushion). The
-// column cursor (charPos) is clamped to the new line's byte length
-// so LSP queries never point past the line end.
+// clampToRuneBoundary returns the byte offset of the start of
+// the rune containing pos. When pos is already on a rune start
+// (or pos == 0 or pos == len(line)), pos is returned unchanged.
+// When pos falls inside a rune (high bits 10xxxxxx), walks
+// backwards to that rune's start. Centralising the math means
+// every motion and renderer can share one rune-aligned contract.
+func clampToRuneBoundary(line string, pos int) int {
+	n := len(line)
+	if pos <= 0 {
+		return 0
+	}
+	if pos >= n {
+		return n
+	}
+	// Walk back until we find a byte that is not a UTF-8
+	// continuation byte (0b10xxxxxx).
+	for pos > 0 && line[pos]&0xC0 == 0x80 {
+		pos--
+	}
+	return pos
+}
+
+// fileViewMoveLine moves the cursor line by delta. The on-screen
+// charPos is `min(preferred, len(newLine))`, rune-snapped to the
+// nearest UTF-8 boundary so the cursor never lands mid-rune. The
+// preferred tracker is held unchanged so j/k preserves the
+// intended column across lines; the visual selection's anchor
+// stays put and the moving end is the cursor itself.
 func (m *model) fileViewMoveLine(delta int) {
 	n := len(m.fileViewer.lines)
 	if n == 0 {
 		return
 	}
 	m.fileViewer.cursor = min(max(m.fileViewer.cursor+delta, 1), n)
-	// ponytail: clamp charPos to the new line's byte length. The
-	// LSP client expects an in-range byte offset; clamping here
-	// keeps every caller honest without per-method guards.
+	// ponytail: clamp charPos to the new line's byte length and
+	// snap to a rune boundary. LSP and the renderer both expect
+	// rune-aligned byte offsets; centralising here means every
+	// caller gets the same answer.
 	lineLen := len(m.fileViewer.lines[m.fileViewer.cursor-1])
-	m.fileViewer.charPos = min(m.fileViewer.charPos, lineLen)
-	if m.fileViewer.visual.Active {
-		v := &m.fileViewer.visual
-		v.LineC = m.fileViewer.cursor
-		// When extending the line range with j/k, snap the anchor
-		// charA to the start of the first selected line and charC
-		// to the end of the last selected line. Compute both ends
-		// from the line endpoints regardless of delta direction.
-		v.CharA = 0
-		v.CharC = lineLen
-	}
+	m.fileViewer.charPos = clampToRuneBoundary(
+		m.fileViewer.lines[m.fileViewer.cursor-1],
+		min(m.fileViewer.preferred, lineLen),
+	)
 	m.scrollFileCursorIntoView()
 	m.refreshFileView()
 }
@@ -1583,9 +1613,10 @@ func (m *model) scrollFileCursorIntoView() {
 }
 
 // fileViewMoveRune moves the column cursor (fileViewer.charPos)
-// by one rune within the current line. Always active: in visual
-// mode the visual CharC is also advanced so the cyan selection
-// highlight tracks the cursor exactly as today.
+// by one rune within the current line. The preferred column
+// tracker tracks the rightmost column reached (max on `l`,
+// unchanged on `h`); the cursor is the visual moving end, so
+// no separate visual field needs updating here.
 func (m *model) fileViewMoveRune(delta int) {
 	lineIdx := m.fileViewer.cursor - 1
 	if lineIdx < 0 || lineIdx >= len(m.fileViewer.lines) {
@@ -1607,23 +1638,81 @@ func (m *model) fileViewMoveRune(delta int) {
 		c -= sz
 	}
 	m.fileViewer.charPos = c
-	if m.fileViewer.visual.Active {
-		m.fileViewer.visual.CharC = c
+	// ponytail: preferred tracks the rightmost column reached on
+	// `l`; `h` retreats the cursor but leaves preferred unchanged
+	// so the next `j`/`k` to a long line restores the column.
+	if delta > 0 {
+		m.fileViewer.preferred = max(m.fileViewer.preferred, c)
 	}
 	m.refreshFileView()
 }
 
-// requestLSP fires one of the three LSP queries at the file
-// viewer's (path, cursor, charPos). nil when m.lsphub is unset
-// (no LSP manager was wired up — tests that don't care). Each
-// of the bridge methods has the same signature, so we accept
-// the function reference instead of repeating the same boilerplate
-// three times. ponytail: shorter than 3 cases with the same body.
+// requestLSP fires one of the three LSP queries at the
+// word under the file viewer's cursor. nil when m.lsphub is
+// unset (no LSP manager was wired up — tests that don't care).
+// Each of the bridge methods has the same signature, so we
+// accept the function reference instead of repeating the same
+// boilerplate three times. ponytail: shorter than 3 cases
+// with the same body.
 func (m *model) requestLSP(issue func(ctx context.Context, path string, line, char int) tea.Cmd) tea.Cmd {
 	if m.lsphub == nil || m.fileViewer.path == "" {
 		return nil
 	}
-	return issue(context.Background(), m.fileRoot+"/"+m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos)
+	line, char := m.wordAtCursor()
+	return issue(context.Background(), m.fileRoot+"/"+m.fileViewer.path, line, char)
+}
+
+// wordAtCursor returns the (line, byte-offset) of the start of
+// the [A-Za-z0-9_] run containing the cursor's charPos. When
+// charPos falls on a non-word byte (whitespace, punctuation,
+// the byte that immediately follows the end of an identifier,
+// or the line-end position one past the last byte), charPos is
+// returned unchanged — the LSP server is then free to return
+// zero results, which the caller treats as silent.
+func (m *model) wordAtCursor() (int, int) {
+	lineIdx := m.fileViewer.cursor - 1
+	if lineIdx < 0 || lineIdx >= len(m.fileViewer.lines) {
+		return m.fileViewer.cursor, m.fileViewer.charPos
+	}
+	line := m.fileViewer.lines[lineIdx]
+	c := m.fileViewer.charPos
+	if c < 0 {
+		c = 0
+	}
+	if c >= len(line) {
+		// ponytail: at or past the line end there's no byte to
+		// classify; LSP gets the position and returns 0 results.
+		return m.fileViewer.cursor, c
+	}
+	if !isWordByte(line[c]) {
+		return m.fileViewer.cursor, c
+	}
+	// ponytail: walk back over the word to its start so the LSP
+	// server sees the word's leading byte, not a position in the
+	// middle of it.
+	for c > 0 && isWordByte(line[c-1]) {
+		c--
+	}
+	return m.fileViewer.cursor, c
+}
+
+// isWordByte reports whether b is a member of the code-identifier
+// alphabet [A-Za-z0-9_]. Code identifiers only — no Unicode
+// categories. LSP servers typically don't tokenise Unicode
+// identifiers anyway, and pinky isn't a prose editor.
+func isWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') || b == '_'
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // exitFileViewer leaves stateFileView, sends didClose for the
@@ -1698,21 +1787,29 @@ func (m *model) jumpToLocation(loc pinkylsp.Location) {
 	}
 	m.fileViewer.cursor = line
 	m.fileViewer.charPos = char
+	m.fileViewer.preferred = char
+	// ponytail: jumps clear visual so a stale anchor doesn't drag
+	// the selection across the new location.
 	m.fileViewer.visual.Active = false
 	m.fileViewer.visual.LineA = line
-	m.fileViewer.visual.CharA = 0
-	m.fileViewer.visual.LineC = line
-	m.fileViewer.visual.CharC = char
+	m.fileViewer.visual.CharA = char
 	m.scrollFileCursorIntoView()
 	m.refreshFileView()
 	m.hoverFooter = ""
 }
 
-// openFileComment opens the comment composer with an anchor from
-// the current cursor / visual selection. No selection → whole
-// file; visual mode line-range → line range; visual mode inline
-// selection → char range on a single line (or char range across
-// the snapped line endpoints).
+// openFileComment opens the comment composer with an anchor
+// derived from the visual selection (or the current line when no
+// visual is active):
+//
+//   - no visual OR single-line point visual:
+//     file line-range anchored to the current line
+//   - visual single-line with a non-empty byte range:
+//     file-inline with min/max char and the verbatim excerpt
+//   - visual multi-line (any char endpoints, including point):
+//     file line-range covering the lines touched by the
+//     selection; char endpoints are dropped (the format has no
+//     multi-line inline kind).
 func (m *model) openFileComment() {
 	fv := &m.fileViewer
 	a := commentAnchor{
@@ -1724,24 +1821,26 @@ func (m *model) openFileComment() {
 		charA: -1,
 		charC: -1,
 	}
+	a.lineStart = fv.cursor
+	a.lineEnd = fv.cursor
 	if fv.visual.Active {
-		a.lineStart, a.lineEnd = fv.visual.LineA, fv.visual.LineC
-		if a.lineStart > a.lineEnd {
-			a.lineStart, a.lineEnd = a.lineEnd, a.lineStart
+		aLine, aChar := fv.visual.LineA, fv.visual.CharA
+		cLine, cChar := fv.cursor, fv.charPos
+		if aLine < cLine {
+			a.lineStart, a.lineEnd = aLine, cLine
+		} else {
+			a.lineStart, a.lineEnd = cLine, aLine
 		}
-		// Inline only when visual picks a non-empty byte range on
-		// a single line. Multi-line visual, or single-line with
-		// CharA == CharC, stays line-range.
-		if a.lineStart == a.lineEnd && fv.visual.CharA != fv.visual.CharC {
-			a.charA = fv.visual.CharA
-			a.charC = fv.visual.CharC
+		// Inline only when the visual spans exactly one line with a
+		// non-empty char range. Multi-line visual collapses to the
+		// line range above; single-line point visual falls back to
+		// the whole-line default seeded before this branch.
+		if a.lineStart == a.lineEnd && aChar != cChar {
+			a.charA, a.charC = aChar, cChar
 			if a.charA > a.charC {
 				a.charA, a.charC = a.charC, a.charA
 			}
 		}
-	} else {
-		a.lineStart = 1
-		a.lineEnd = len(fv.lines)
 	}
 	m.commentAnchor = a
 	m.enterCommentComposer(a)
@@ -1974,7 +2073,7 @@ func (m model) FullHelp() [][]key.Binding {
 		}
 	case stateFileView:
 		return [][]key.Binding{
-			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp},
+			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp, defaultKeyMap.FileViewLeft, defaultKeyMap.FileViewRight},
 			{defaultKeyMap.FileViewVisual, defaultKeyMap.FileViewComment, defaultKeyMap.NavSend},
 			{defaultKeyMap.FileViewDefinition, defaultKeyMap.FileViewReferences, defaultKeyMap.FileViewHover},
 			{defaultKeyMap.FileViewBack, defaultKeyMap.Tab, defaultKeyMap.Help},
@@ -2407,37 +2506,128 @@ func (m model) fileNavView() string {
 }
 
 // renderFileContent builds the per-line rendered string for the
-// file viewer: a green `▍` selector gutter on the cursor's line
-// (highest priority), a yellow `▍` gutter on commented lines, a
-// space otherwise, right-aligned line numbers, and an inline cyan
-// highlight of the visual selection. Three colours stay distinct
-// so tests can pin each one independently. The whole string is fed
-// to m.fileViewer.viewport so the cursor's gutter scrolls with the
-// content via the existing scrollFileCursorIntoView call.
+// file viewer: a yellow `▍` gutter on lines covered by a
+// file-kind comment (empty gutter otherwise; no cursor gutter),
+// right-aligned line numbers, an inline cyan highlight of the
+// visual selection, and an inline block cursor at the file
+// viewer's (cursor, charPos) rendered with an inverted
+// background. The cursor's ANSI is layered over the selection's
+// so the cursor byte is visible even when it overlaps the
+// selection range.
 func (m model) renderFileContent() string {
 	if len(m.fileViewer.lines) == 0 {
 		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 		return dimStyle.Render("(empty file)")
 	}
-	const green = "\x1b[38;5;42m"
 	const yellow = "\x1b[38;5;228m"
 	width := len(strconv.Itoa(len(m.fileViewer.lines)))
 	var b strings.Builder
 	for i, content := range m.fileViewer.lines {
 		ln := i + 1
 		var gutter string
-		switch {
-		case ln == m.fileViewer.cursor:
-			gutter = green + "▍" + resetANSI
-		case i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment:
+		if i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment {
 			gutter = yellow + "▍" + resetANSI
-		default:
+		} else {
 			gutter = " "
 		}
-		fmt.Fprintf(&b, "%s %*d  %s\n", gutter, width, ln, applySelection(content, ln, m.fileViewer.visual))
+		selected := applySelection(content, ln, m.fileViewer.visual, m.fileViewer.cursor, m.fileViewer.charPos)
+		var rendered string
+		if ln == m.fileViewer.cursor {
+			rendered = applyCursor(selected, content, m.fileViewer.charPos)
+		} else {
+			rendered = selected
+		}
+		fmt.Fprintf(&b, "%s %*d  %s\n", gutter, width, ln, rendered)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
+
+// applyCursor wraps the rune at charPos with an inverted-background
+// ANSI escape so the cursor byte is visually distinct. When
+// charPos == len(line) (the cursor sits at the line end), a
+// trailing inverted space is rendered so the cursor still appears
+// at the end of the line. selected is the line content already
+// carrying the cyan selection ANSI; the cursor's escapes are
+// layered over it so the cursor byte wins on overlap.
+func applyCursor(selected, line string, charPos int) string {
+	if charPos < 0 {
+		charPos = 0
+	}
+	if charPos >= len(line) {
+		// Trailing space at the line end.
+		return selected + "\x1b[7m \x1b[27m"
+	}
+	_, sz := utf8.DecodeRuneInString(line[charPos:])
+	end := charPos + sz
+	// Find the rune start in `selected` that corresponds to
+	// `charPos`. Since selected is derived from line via
+	// applySelection (which splices ANSI codes around whole bytes
+	// without re-ordering), the byte offset maps 1:1 onto the
+	// string positions outside the ANSI escapes; we need to walk
+	// past ANSI sequences to find the position.
+	return spliceInvert(selected, charPos, end)
+}
+
+// spliceInvert inserts \x1b[7m ... \x1b[27m around the rune
+// spanning [start, end) in line. ANSI escapes inside `selected`
+// are preserved and not split.
+func spliceInvert(selected string, start, end int) string {
+	var b strings.Builder
+	pos := 0
+	for i := 0; i < len(selected); {
+		if selected[i] == 0x1b {
+			// ponytail: copy the ANSI sequence verbatim. We
+			// support CSI (\x1b[...m) and single-char ESC
+			// sequences (\x1b m, \x1b 7, etc.); the CSI
+			// terminator is a byte in [0x40, 0x7e] AFTER the
+			// leading `[`, so we skip the `[` first.
+			j := i + 1
+			if j < len(selected) && selected[j] == '[' {
+				j++
+				for j < len(selected) {
+					c := selected[j]
+					j++
+					if c >= 0x40 && c <= 0x7e {
+						break
+					}
+				}
+			} else if j < len(selected) {
+				j++
+			}
+			b.WriteString(selected[i:j])
+			i = j
+			continue
+		}
+		if pos == start {
+			b.WriteString(cursorInvertOn)
+		}
+		// write one rune (or one byte for invalid UTF-8)
+		_, sz := utf8.DecodeRuneInString(selected[i:])
+		if sz <= 0 {
+			sz = 1
+		}
+		b.WriteString(selected[i : i+sz])
+		if pos == end-1 {
+			b.WriteString(cursorInvertOff)
+		}
+		pos++
+		i += sz
+	}
+	if start >= len(selected) {
+		// start is past the visible content; render trailing block
+		b.WriteString(cursorInvertOn)
+		b.WriteByte(' ')
+		b.WriteString(cursorInvertOff)
+	}
+	return b.String()
+}
+
+const (
+	selectionANSI  = "\x1b[38;5;51m"
+	resetANSI      = "\x1b[0m"
+	cursorInvertOn = "\x1b[7m"
+	cursorInvertOff = "\x1b[27m"
+)
 
 // fileViewView renders the file-viewer header (path + optional
 // `lines N-M of K` position indicator) followed by the file
@@ -2542,14 +2732,21 @@ func (m *model) refreshFileView() {
 	m.fileViewer.viewport.SetContent(m.renderFileContent())
 }
 
-// applySelection splices cyan ANSI around the byte range of lineNo
-// that falls inside sel. Returns content unchanged when sel is
-// inactive or this line is outside the selection.
-func applySelection(line string, lineNo int, sel fileSelection) string {
+// applySelection splices cyan ANSI around the byte range of
+// lineNo that falls inside the visual selection. The selection
+// anchor lives in sel; the moving end is the cursor
+// (cursorLine, cursorChar). Interior lines between the anchor
+// and cursor lines are fully highlighted; endpoint lines show
+// partial byte ranges between the anchor/cursor char and the
+// line start/end. Returns content unchanged when sel is
+// inactive or lineNo is outside the selection.
+func applySelection(line string, lineNo int, sel fileSelection, cursorLine, cursorChar int) string {
 	if !sel.Active {
 		return line
 	}
-	la, lc := sel.LineA, sel.LineC
+	aLine, aChar := sel.LineA, sel.CharA
+	cLine, cChar := cursorLine, cursorChar
+	la, lc := aLine, cLine
 	if la > lc {
 		la, lc = lc, la
 	}
@@ -2559,12 +2756,25 @@ func applySelection(line string, lineNo int, sel fileSelection) string {
 	var a, c int
 	switch {
 	case la == lc:
-		a, c = sel.CharA, sel.CharC
+		// single-line selection: bytes from min(aChar,cChar) to
+		// max(aChar,cChar)
+		a, c = aChar, cChar
 	case lineNo == la:
-		a, c = sel.CharA, len(line)
+		// anchor-side endpoint: bytes from aChar to line end
+		if la == aLine {
+			a, c = aChar, len(line)
+		} else {
+			a, c = cChar, len(line)
+		}
 	case lineNo == lc:
-		a, c = 0, sel.CharC
+		// cursor-side endpoint: bytes from line start to cChar
+		if lc == cLine {
+			a, c = 0, cChar
+		} else {
+			a, c = 0, aChar
+		}
 	default:
+		// interior line: every byte
 		a, c = 0, len(line)
 	}
 	if a > c {
@@ -2581,11 +2791,6 @@ func applySelection(line string, lineNo int, sel fileSelection) string {
 	}
 	return line[:a] + selectionANSI + line[a:c] + resetANSI + line[c:]
 }
-
-const (
-	selectionANSI = "\x1b[38;5;51m"
-	resetANSI     = "\x1b[0m"
-)
 
 func (m model) pickerView() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
