@@ -344,10 +344,12 @@ func (m *Manager) DidClose(ctx context.Context, path string) {
 }
 
 // FindDefinition runs textDocument/definition at (line, char) in
-// path and delivers the reply asynchronously on m.requests.
-func (m *Manager) FindDefinition(ctx context.Context, path string, line, char int) {
+// path and delivers the reply asynchronously on m.requests. The
+// caller (the bridge) supplies id so the bridge's wait loop and
+// the manager's deliver key off the same id — round-trip closes.
+func (m *Manager) FindDefinition(ctx context.Context, id int64, path string, line, char int) {
 	req := Request{
-		ID:   m.nextRequestID(),
+		ID:   id,
 		Kind: KindDefinition,
 		URI:  uriForPath(path),
 		Line: line,
@@ -357,10 +359,12 @@ func (m *Manager) FindDefinition(ctx context.Context, path string, line, char in
 }
 
 // FindReferences runs textDocument/references at (line, char) in
-// path and delivers the reply asynchronously on m.requests.
-func (m *Manager) FindReferences(ctx context.Context, path string, line, char int) {
+// path and delivers the reply asynchronously on m.requests. The
+// caller (the bridge) supplies id so the bridge's wait loop and
+// the manager's deliver key off the same id — round-trip closes.
+func (m *Manager) FindReferences(ctx context.Context, id int64, path string, line, char int) {
 	req := Request{
-		ID:   m.nextRequestID(),
+		ID:   id,
 		Kind: KindReferences,
 		URI:  uriForPath(path),
 		Line: line,
@@ -370,10 +374,12 @@ func (m *Manager) FindReferences(ctx context.Context, path string, line, char in
 }
 
 // Hover runs textDocument/hover at (line, char) in path and
-// delivers the reply asynchronously on m.requests.
-func (m *Manager) Hover(ctx context.Context, path string, line, char int) {
+// delivers the reply asynchronously on m.requests. The caller
+// (the bridge) supplies id so the bridge's wait loop and the
+// manager's deliver key off the same id — round-trip closes.
+func (m *Manager) Hover(ctx context.Context, id int64, path string, line, char int) {
 	req := Request{
-		ID:   m.nextRequestID(),
+		ID:   id,
 		Kind: KindHover,
 		URI:  uriForPath(path),
 		Line: line,

@@ -41,20 +41,22 @@ func (b *Bridge) RequestHover(ctx context.Context, path string, line, char int) 
 	return b.run(ctx, b.mgr.Hover, KindHover, path, line, char, b.waitForHover)
 }
 
-// run stamps an id, fires issue against the manager, and returns
-// the wait function bound to that id. Both wait helpers consume
-// the same id-stamped Result and translate it into the matching
-// Bubble Tea Msg. kind is carried onto LocationsMsg so the model
-// can pick the right jump-vs-picker rule.
+// run allocates the request id once (synchronously), stamps it
+// onto the Manager-side Request via issue, and returns the wait
+// helper bound to the same id. The wait helper and the
+// Manager's deliver both key off this single id so the reply
+// round-trip closes. ponytail: one counter tick per request,
+// not two — keeping the bridge and the manager on the same id
+// is what makes the channel-based hand-off actually work.
 func (b *Bridge) run(
 	ctx context.Context,
-	issue func(context.Context, string, int, int),
+	issue func(ctx context.Context, id int64, path string, line, char int),
 	kind Kind,
 	path string, line, char int,
 	wait func(kind Kind, id int64) tea.Cmd,
 ) tea.Cmd {
 	id := b.mgr.nextRequestID()
-	issue(ctx, path, line, char)
+	issue(ctx, id, path, line, char)
 	return wait(kind, id)
 }
 
