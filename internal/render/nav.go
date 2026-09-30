@@ -11,6 +11,8 @@ const (
 	ActionBlockUp             // k
 	ActionRuneLeft            // h
 	ActionRuneRight           // l
+	ActionWordRight           // w
+	ActionWordLeft            // b
 	ActionEnterVisual
 	ActionExitVisual
 	ActionComment
@@ -114,6 +116,23 @@ func NavHandle(r rune, st *NavState, cur *NavCursor, sel *NavSelection, lines []
 			sel.ByteC = byteOffset(lineStartOffsets, cur.LineIdx, cur.CharPos)
 		}
 		return ActionRuneLeft
+	case 'w':
+		li, cp := NextWordStart(lines, cur.LineIdx, cur.CharPos)
+		cur.LineIdx, cur.CharPos = li, cp
+		if cur.CharPos > cur.Preferred {
+			cur.Preferred = cur.CharPos
+		}
+		if st.Visual == NavLine {
+			sel.ByteC = byteOffset(lineStartOffsets, cur.LineIdx, cur.CharPos)
+		}
+		return ActionWordRight
+	case 'b':
+		li, cp := PrevWordStart(lines, cur.LineIdx, cur.CharPos)
+		cur.LineIdx, cur.CharPos = li, cp
+		if st.Visual == NavLine {
+			sel.ByteC = byteOffset(lineStartOffsets, cur.LineIdx, cur.CharPos)
+		}
+		return ActionWordLeft
 	case 'l':
 		max := len(lines[cur.LineIdx])
 		if cur.CharPos < max {

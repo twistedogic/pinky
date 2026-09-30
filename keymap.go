@@ -28,6 +28,8 @@ type keyMap struct {
 	NavBlockUp   key.Binding // k, ↑
 	NavRuneLeft  key.Binding // h
 	NavRuneRight key.Binding // l
+	NavWordRight key.Binding // w
+	NavWordLeft  key.Binding // b
 	NavVisual    key.Binding // v
 	NavComment   key.Binding // c
 	NavSend      key.Binding // s
@@ -50,6 +52,8 @@ type keyMap struct {
 	FileViewDown       key.Binding // j, ↓
 	FileViewLeft       key.Binding // h
 	FileViewRight      key.Binding // l
+	FileViewWordRight  key.Binding // w
+	FileViewWordLeft   key.Binding // b
 	FileViewVisual     key.Binding // v
 	FileViewComment    key.Binding // c
 	FileViewDefinition key.Binding // d
@@ -115,6 +119,14 @@ var defaultKeyMap = keyMap{
 	NavRuneRight: key.NewBinding(
 		key.WithKeys("l"),
 		key.WithHelp("l", "rune right"),
+	),
+	NavWordRight: key.NewBinding(
+		key.WithKeys("w"),
+		key.WithHelp("w", "word forward"),
+	),
+	NavWordLeft: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "word back"),
 	),
 	NavVisual: key.NewBinding(
 		key.WithKeys("v"),
@@ -191,6 +203,14 @@ var defaultKeyMap = keyMap{
 	FileViewRight: key.NewBinding(
 		key.WithKeys("l"),
 		key.WithHelp("l", "rune right"),
+	),
+	FileViewWordRight: key.NewBinding(
+		key.WithKeys("w"),
+		key.WithHelp("w", "word forward"),
+	),
+	FileViewWordLeft: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "word back"),
 	),
 	FileViewVisual: key.NewBinding(
 		key.WithKeys("v"),

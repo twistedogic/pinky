@@ -1056,7 +1056,8 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// unrecognised rune — forward to viewport (so keys like '/'
 			// for find, etc., could still work in future).
 		case render.ActionBlockDown, render.ActionBlockUp,
-			render.ActionRuneLeft, render.ActionRuneRight:
+			render.ActionRuneLeft, render.ActionRuneRight,
+			render.ActionWordRight, render.ActionWordLeft:
 			m.scrollCursorIntoView()
 			m.refreshViewport()
 		case render.ActionEnterVisual:
@@ -1432,6 +1433,19 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fileViewMoveRune(-1)
 		return m, nil
 	}
+	// w / b: word motion. Reuses the same render.NextWordStart /
+	// PrevWordStart as stateNav; cursor is the visual moving end,
+	// so the selection tracks automatically.
+	if isKeyRune(msg, 'w') {
+		m.clearHoverFooter()
+		m.fileViewMoveWord(+1)
+		return m, nil
+	}
+	if isKeyRune(msg, 'b') {
+		m.clearHoverFooter()
+		m.fileViewMoveWord(-1)
+		return m, nil
+	}
 
 	if isKeyRune(msg, 'c') {
 		m.clearHoverFooter()
@@ -1621,6 +1635,34 @@ func (m *model) fileViewMoveRune(delta int) {
 	if delta > 0 {
 		m.fileViewer.preferred = max(m.fileViewer.preferred, c)
 	}
+	m.refreshFileView()
+}
+
+// fileViewMoveWord moves the cursor to the start of the next or
+// previous word. Blank lines are separators; punctuation runs are
+// words on their own (vim's iskeyword model). `delta > 0` advances,
+// `delta < 0` retreats. `w` updates `preferred` like `l`; `b` leaves
+// it like `h`. The cursor is the visual moving end, so the
+// selection tracks automatically — no separate visual field to
+// update.
+func (m *model) fileViewMoveWord(delta int) {
+	n := len(m.fileViewer.lines)
+	if n == 0 {
+		return
+	}
+	li := m.fileViewer.cursor - 1 // render pkg is 0-based
+	var nli, ncp int
+	if delta > 0 {
+		nli, ncp = render.NextWordStart(m.fileViewer.lines, li, m.fileViewer.charPos)
+	} else {
+		nli, ncp = render.PrevWordStart(m.fileViewer.lines, li, m.fileViewer.charPos)
+	}
+	m.fileViewer.cursor = nli + 1 // back to 1-based
+	m.fileViewer.charPos = ncp
+	if delta > 0 && ncp > m.fileViewer.preferred {
+		m.fileViewer.preferred = ncp
+	}
+	m.scrollFileCursorIntoView()
 	m.refreshFileView()
 }
 
@@ -2008,7 +2050,7 @@ func (m model) FullHelp() [][]key.Binding {
 		}
 	case stateNav:
 		return [][]key.Binding{
-			{defaultKeyMap.NavBlockDown, defaultKeyMap.NavBlockUp, defaultKeyMap.NavRuneLeft, defaultKeyMap.NavRuneRight},
+			{defaultKeyMap.NavBlockDown, defaultKeyMap.NavBlockUp, defaultKeyMap.NavRuneLeft, defaultKeyMap.NavRuneRight, defaultKeyMap.NavWordRight, defaultKeyMap.NavWordLeft},
 			{defaultKeyMap.NavVisual, defaultKeyMap.NavComment, defaultKeyMap.NavSend, defaultKeyMap.NavCompose, defaultKeyMap.NavRefresh},
 			{defaultKeyMap.Tab, defaultKeyMap.NavQuit, defaultKeyMap.Help},
 		}
@@ -2031,7 +2073,7 @@ func (m model) FullHelp() [][]key.Binding {
 		}
 	case stateFileView:
 		return [][]key.Binding{
-			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp, defaultKeyMap.FileViewLeft, defaultKeyMap.FileViewRight},
+			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp, defaultKeyMap.FileViewLeft, defaultKeyMap.FileViewRight, defaultKeyMap.FileViewWordRight, defaultKeyMap.FileViewWordLeft},
 			{defaultKeyMap.FileViewVisual, defaultKeyMap.FileViewComment, defaultKeyMap.NavSend},
 			{defaultKeyMap.FileViewDefinition, defaultKeyMap.FileViewReferences, defaultKeyMap.FileViewHover},
 			{defaultKeyMap.FileViewBack, defaultKeyMap.Tab, defaultKeyMap.Help},

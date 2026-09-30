@@ -298,3 +298,149 @@ func TestFileView_CursorAtEndOfLineTrailingBlock(t *testing.T) {
 			view[:min(120, len(view))])
 	}
 }
+
+// TestFileView_WAdvancesToNextWord: pressing `w` from the start of
+// a word moves the cursor to the start of the next word.
+func TestFileView_WAdvancesToNextWord(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "foo bar\n")
+	m := openFileInFixture(t, root, rel)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.cursor != 1 {
+		t.Errorf("after w: cursor = %d; want 1 (same line)", m.fileViewer.cursor)
+	}
+	if m.fileViewer.charPos != 4 {
+		t.Errorf("after w: charPos = %d; want 4 (start of 'bar')", m.fileViewer.charPos)
+	}
+}
+
+// TestFileView_BCrossesLine: pressing `b` from the first word of
+// line 2 jumps to the last word on line 1.
+func TestFileView_BCrossesLine(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "foo bar\nbaz qux\n")
+	m := openFileInFixture(t, root, rel)
+	// j to line 2 (cursor=2, charPos follows preferred)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = updatedModelPtr(upd)
+	// b: from 'b' of "baz" (cursor=2, charPos=0) → start of "bar" (cursor=1, charPos=4)
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.cursor != 1 || m.fileViewer.charPos != 4 {
+		t.Errorf("after b from (2,0): cursor=(%d,%d); want (1,4)",
+			m.fileViewer.cursor, m.fileViewer.charPos)
+	}
+}
+
+// TestFileView_WSkipsBlankLine: blank lines in the file are word
+// separators.
+func TestFileView_WSkipsBlankLine(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "hello\n\nworld\n")
+	m := openFileInFixture(t, root, rel)
+	// Move to end of "hello" with l l l l l
+	for range 5 {
+		upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+		m = updatedModelPtr(upd)
+	}
+	// w: from end of "hello" → start of "world" (line 3, charPos 0)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.cursor != 3 || m.fileViewer.charPos != 0 {
+		t.Errorf("after w blank-skip: cursor=(%d,%d); want (3,0)",
+			m.fileViewer.cursor, m.fileViewer.charPos)
+	}
+}
+
+// TestFileView_WUpdatesPreferred: pressing `w` raises preferred
+// to the new charPos, like `l`.
+func TestFileView_WUpdatesPreferred(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "foo bar\n")
+	m := openFileInFixture(t, root, rel)
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.preferred != 4 {
+		t.Errorf("after w: preferred = %d; want 4", m.fileViewer.preferred)
+	}
+}
+
+// TestFileView_BLeavesPreferred: pressing `b` leaves preferred
+// unchanged, like `h`.
+func TestFileView_BLeavesPreferred(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "foo bar\n")
+	m := openFileInFixture(t, root, rel)
+	// set preferred to 4 via w
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.preferred != 4 {
+		t.Fatalf("setup: preferred = %d; want 4", m.fileViewer.preferred)
+	}
+	// b: cursor on 'b' of "bar" (1,4); preferred stays 4
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.preferred != 4 {
+		t.Errorf("after b: preferred = %d; want 4 (unchanged)", m.fileViewer.preferred)
+	}
+	if m.fileViewer.charPos != 0 {
+		t.Errorf("after b: charPos = %d; want 0 (start of 'foo')", m.fileViewer.charPos)
+	}
+}
+
+// TestFileView_WNoOpAtEndOfFile: pressing `w` at the last word of
+// the last line is a no-op.
+func TestFileView_WNoOpAtEndOfFile(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "alpha\n")
+	m := openFileInFixture(t, root, rel)
+	// l l l l l to end of "alpha"
+	for range 5 {
+		upd, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+		m = updatedModelPtr(upd)
+	}
+	beforeCursor, beforePos := m.fileViewer.cursor, m.fileViewer.charPos
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.cursor != beforeCursor || m.fileViewer.charPos != beforePos {
+		t.Errorf("w at end should no-op; got (%d,%d) want (%d,%d)",
+			m.fileViewer.cursor, m.fileViewer.charPos, beforeCursor, beforePos)
+	}
+}
+
+// TestFileView_BNoOpAtStartOfFile: pressing `b` at the first rune
+// of the first line is a no-op.
+func TestFileView_BNoOpAtStartOfFile(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "alpha\nbeta\n")
+	m := openFileInFixture(t, root, rel)
+	beforeCursor, beforePos := m.fileViewer.cursor, m.fileViewer.charPos
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.cursor != beforeCursor || m.fileViewer.charPos != beforePos {
+		t.Errorf("b at start should no-op; got (%d,%d) want (%d,%d)",
+			m.fileViewer.cursor, m.fileViewer.charPos, beforeCursor, beforePos)
+	}
+}
+
+// TestFileView_VWExtendsSelection: pressing `v` then `w` moves the
+// cursor while the anchor stays put.
+func TestFileView_VWExtendsSelection(t *testing.T) {
+	root, rel := writeUTF8Fixture(t, "main.go", "foo bar\n")
+	m := openFileInFixture(t, root, rel)
+	// Enter visual
+	upd, _ := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m = updatedModelPtr(upd)
+	if !m.fileViewer.visual.Active {
+		t.Fatalf("setup: visual not active")
+	}
+	if m.fileViewer.visual.LineA != 1 || m.fileViewer.visual.CharA != 0 {
+		t.Fatalf("setup: anchor = (%d,%d); want (1,0)",
+			m.fileViewer.visual.LineA, m.fileViewer.visual.CharA)
+	}
+	// w moves cursor to (1, 4); anchor stays (1, 0)
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	m = updatedModelPtr(upd)
+	if m.fileViewer.visual.LineA != 1 || m.fileViewer.visual.CharA != 0 {
+		t.Errorf("after w in visual: anchor = (%d,%d); want (1,0) (unchanged)",
+			m.fileViewer.visual.LineA, m.fileViewer.visual.CharA)
+	}
+	if m.fileViewer.cursor != 1 || m.fileViewer.charPos != 4 {
+		t.Errorf("after w in visual: cursor = (%d,%d); want (1,4)",
+			m.fileViewer.cursor, m.fileViewer.charPos)
+	}
+}

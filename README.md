@@ -110,6 +110,7 @@ markdown. Within that message:
 | `j` | Move cursor to next source line |
 | `k` | Move cursor to previous source line |
 | `h` / `l` | Move cursor one rune left / right within the current source line |
+| `w` / `b` | Move cursor to the start of the next / previous word (crosses line boundaries; blank lines are separators) |
 | `v` | Enter visual mode (toggle; `v` again exits) |
 | `Esc` | Exit visual mode |
 | `c` | Open the comment composer (anchored to selection, or whole current line) |

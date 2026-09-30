@@ -412,6 +412,42 @@ request SHALL be sent at `charPos` unchanged.
   `preferred` unchanged; the visual selection's `CharC` follows
   the cursor's char position
 
+#### Scenario: `w` advances to the next word within the file
+
+- **WHEN** the user presses `w` in `stateFileView` and the cursor
+  is in a word, on a separator, or mid-line
+- **THEN** the cursor advances to the start of the next word:
+  first across the rest of the current word run (if any), then
+  past any separators (whitespace and any blank lines), landing
+  on the byte offset of the first rune of the next word. A word
+  is a maximal run of `[A-Za-z0-9_]`, or a punctuation run
+  (vim's `iskeyword` model). `preferred` becomes
+  `max(preferred, charPos)`.
+
+#### Scenario: `b` retreats to the previous word within the file
+
+- **WHEN** the user presses `b` in `stateFileView`
+- **THEN** the cursor retreats to the start of the previous
+  word, crossing `\n` and skipping blank lines as separators.
+  `preferred` is unchanged.
+
+#### Scenario: `w` / `b` no-op at file boundaries
+
+- **WHEN** the cursor is on the last word of the last line and
+  the user presses `w`, OR the cursor is on the first word of the
+  first line and the user presses `b`
+- **THEN** the cursor's `(cursor, charPos, preferred)` is
+  unchanged.
+
+#### Scenario: `vw` extends a visual selection across words
+
+- **WHEN** the user is in `stateFileView` visual mode and presses
+  `w`
+- **THEN** the cursor advances to the next word's start, the
+  visual selection's anchor stays put at the original
+  `(LineA, CharA)`, and the highlight tracks the byte range
+  between the anchor and the new cursor position.
+
 #### Scenario: `j` in visual mode extends the line range
 
 - **WHEN** the user is in `stateFileView` visual mode on line
