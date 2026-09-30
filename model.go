@@ -109,6 +109,7 @@ type lspManager interface {
 	FindDefinition(ctx context.Context, id int64, path string, line, char int)
 	FindReferences(ctx context.Context, id int64, path string, line, char int)
 	Hover(ctx context.Context, id int64, path string, line, char int)
+	ServerStatus(path string) pinkylsp.ServerStatus
 	Shutdown(ctx context.Context)
 }
 
@@ -2769,14 +2770,47 @@ func (m model) statusLine() string {
 		}
 		text += fmt.Sprintf("  [I] include %d comments — %s", len(m.comments), flag)
 	}
+	// LSP chip: surfaces the current file's language-server state
+	// (none / starting / ready / missing / error) so the user can
+	// tell at a glance why d/R/K return nothing. Rendered as a
+	// single trailing chip with a state-specific glyph and colour.
+	var lspChip string
+	if m.state == stateFileView && m.fileViewer.path != "" && m.lsp != nil {
+		if s := m.lsp.ServerStatus(m.fileRoot + "/" + m.fileViewer.path); s.State != pinkylsp.ServerNone {
+			lspChip = "  " + renderLSPChip(s)
+		}
+	}
 	// Visual mode has no other persistent on-screen marker (the
 	// borders follow viewport.YOffset, not the visual cursor), so
 	// surface it here as the only signal that V did something.
-	rendered := statusBarStyle.Render(text)
+	rendered := statusBarStyle.Render(text + lspChip)
 	if m.nav.Visual == render.NavLine {
 		rendered += visualModeStyle.Render(" VISUAL ")
 	}
 	// Tab indicator moved to the top-of-screen `tabHeader()` row;
 	// the status line no longer carries a tab chip.
 	return padRight(rendered, m.width)
+}
+
+// renderLSPChip returns the styled `[LSP <name> <glyph>]` chip
+// for one server state. Glyphs: ● ready (green), … starting
+// (yellow), ✗ missing / error (red). The label is the canonical
+// lang id (e.g. "gopls"); install hints stay in the hover footer,
+// not here.
+func renderLSPChip(s pinkylsp.ServerStatus) string {
+	var glyph, color string
+	switch s.State {
+	case pinkylsp.ServerReady:
+		glyph, color = "●", "42"
+	case pinkylsp.ServerStarting:
+		glyph, color = "…", "228"
+	case pinkylsp.ServerMissing:
+		glyph, color = "✗", "196"
+	case pinkylsp.ServerError:
+		glyph, color = "✗", "196"
+	default:
+		return ""
+	}
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	return style.Render(fmt.Sprintf("[LSP %s %s]", s.LangID, glyph))
 }

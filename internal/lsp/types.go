@@ -55,6 +55,30 @@ type Request struct {
 	Char  int // 0-based byte offset into the line
 }
 
+// ServerState is the lifecycle state of one language server as
+// observed by the model layer's status-line render. Sourced from
+// the Manager's internal clientEntry.state plus the 30s
+// unavailable window.
+type ServerState int
+
+const (
+	ServerNone ServerState = iota // no server registered for this extension
+	ServerStarting                // binary on PATH, spawn in progress
+	ServerReady                   // Initialize succeeded, queries can run
+	ServerMissing                 // binary not on PATH (inside unavailableWindow)
+	ServerError                   // other spawn / init failure
+)
+
+// ServerStatus is a snapshot of one language server's state for
+// a given file path. Returned by Manager.ServerStatus so the
+// model can render a "LSP: gopls ●" chip in the file-viewer
+// status line without keeping a parallel cache.
+type ServerStatus struct {
+	LangID  string // canonical name (e.g. "gopls", "rust-analyzer")
+	Command string // binary on PATH (e.g. "gopls")
+	State   ServerState
+}
+
 // Result is the reply delivered to the model layer. Exactly one
 // of Locations / Hover carries a non-nil value, dispatching on
 // req.Kind. Err is non-nil when the LSP call failed; the model

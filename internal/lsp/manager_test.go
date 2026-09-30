@@ -143,3 +143,45 @@ func TestManager_ShutdownIsIdempotent(t *testing.T) {
 	m.Shutdown(ctx)
 	m.Shutdown(ctx)
 }
+
+// TestManager_ServerStatus_UnknownExt: a path whose extension
+// has no registered server returns ServerNone so the model can
+// omit the LSP chip.
+func TestManager_ServerStatus_UnknownExt(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir)
+	got := m.ServerStatus(filepath.Join(dir, "foo.zzznosuch"))
+	if got.State != ServerNone {
+		t.Errorf("expected ServerNone; got %+v", got)
+	}
+}
+
+// TestManager_ServerStatus_RegisteredStarting: a registered
+// extension with no client yet (no query has fired) reports
+// ServerStarting so the status line can show a "…" chip instead
+// of falsely claiming the server is ready.
+func TestManager_ServerStatus_RegisteredStarting(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir)
+	got := m.ServerStatus(filepath.Join(dir, "foo.go"))
+	if got.State != ServerStarting {
+		t.Errorf("expected ServerStarting; got %+v", got)
+	}
+	if got.LangID != "gopls" {
+		t.Errorf("expected LangID=gopls; got %q", got.LangID)
+	}
+}
+
+// TestManager_ServerStatus_MissingAfterEnsure: after ensureServer
+// fails on a missing binary, ServerStatus returns ServerMissing
+// (not ServerStarting) so the status line surfaces "✗" until the
+// 30 s window expires.
+func TestManager_ServerStatus_MissingAfterEnsure(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir)
+	t.Setenv("PATH", "")
+	_, _, _ = m.ensureServer(context.Background(), filepath.Join(dir, "x.go"))
+	if s := m.ServerStatus(filepath.Join(dir, "x.go")); s.State != ServerMissing {
+		t.Errorf("expected ServerMissing after ensureServer miss; got %+v", s)
+	}
+}

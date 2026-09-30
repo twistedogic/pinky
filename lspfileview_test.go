@@ -4,9 +4,11 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	pinkylsp "github.com/twistedogic/pinky/internal/lsp"
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
@@ -20,7 +22,8 @@ import (
 // / Hover / Shutdown). Swapping in a fake keeps the model layer
 // testable without spinning up gopls.
 type fakeLSPManager struct {
-	calls []string
+	calls  []string
+	status pinkylsp.ServerStatus
 }
 
 func (f *fakeLSPManager) record(method string) {
@@ -37,6 +40,10 @@ func (f *fakeLSPManager) FindReferences(_ context.Context, _ int64, _ string, _,
 }
 func (f *fakeLSPManager) Hover(_ context.Context, _ int64, _ string, _, _ int) {
 	f.record("Hover")
+}
+func (f *fakeLSPManager) ServerStatus(path string) pinkylsp.ServerStatus {
+	f.record("ServerStatus")
+	return f.status
 }
 func (f *fakeLSPManager) Shutdown(_ context.Context) { f.record("Shutdown") }
 
@@ -269,6 +276,55 @@ func TestFileView_DidCloseOnEsc(t *testing.T) {
 	m = updatedModelPtr(upd)
 	if !slices.Contains(fm.calls, "DidClose") {
 		t.Errorf("expected DidClose in calls; got %v", fm.calls)
+	}
+}
+
+// TestFileView_StatusLine_LSPChipReady: in the file viewer, the
+// status line carries an `[LSP gopls ●]` chip when the manager
+// reports ServerReady for the open file. Tells the user d/R/K
+// queries are live, even before any key is pressed.
+func TestFileView_StatusLine_LSPChipReady(t *testing.T) {
+	m := attachFileFixture(t)
+	fm := &fakeLSPManager{status: pinkylsp.ServerStatus{
+		LangID: "gopls", Command: "gopls", State: pinkylsp.ServerReady,
+	}}
+	m.lsp = fm
+	openFile(t, m, "src/main.go")
+
+	if got := ansi.Strip(m.statusLine()); !strings.Contains(got, "[LSP gopls ●]") {
+		t.Errorf("status line missing ready chip; got %q", got)
+	}
+}
+
+// TestFileView_StatusLine_LSPChipMissing: a ServerMissing state
+// surfaces `✗` so the user can see why d/R/K are silent (the
+// gopls binary isn't on PATH).
+func TestFileView_StatusLine_LSPChipMissing(t *testing.T) {
+	m := attachFileFixture(t)
+	fm := &fakeLSPManager{status: pinkylsp.ServerStatus{
+		LangID: "gopls", Command: "gopls", State: pinkylsp.ServerMissing,
+	}}
+	m.lsp = fm
+	openFile(t, m, "src/main.go")
+
+	if got := ansi.Strip(m.statusLine()); !strings.Contains(got, "[LSP gopls ✗]") {
+		t.Errorf("status line missing missing-state chip; got %q", got)
+	}
+}
+
+// TestFileView_StatusLine_NoLSPOutsideFileView: the chip only
+// renders in stateFileView; outside the file viewer the status
+// line stays slim. Avoids cluttering the nav / compose bars.
+func TestFileView_StatusLine_NoLSPOutsideFileView(t *testing.T) {
+	m := attachFileFixture(t)
+	fm := &fakeLSPManager{status: pinkylsp.ServerStatus{
+		LangID: "gopls", Command: "gopls", State: pinkylsp.ServerReady,
+	}}
+	m.lsp = fm
+	m.state = stateFileNav // back out of the file viewer
+
+	if got := ansi.Strip(m.statusLine()); strings.Contains(got, "LSP") {
+		t.Errorf("status line should not show LSP chip outside file view; got %q", got)
 	}
 }
 

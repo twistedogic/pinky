@@ -307,6 +307,40 @@ func (m *Manager) ensureServer(ctx context.Context, path string) (*clientEntry, 
 	return entry, langID, nil
 }
 
+// ServerStatus returns a snapshot of the language server's state
+// for path. Cheap — just a map lookup under m.mu — so the model
+// layer can call it on every status-line render without caching.
+// Returns ServerNone when no default server handles path's
+// extension; the model omits the chip in that case.
+func (m *Manager) ServerStatus(path string) ServerStatus {
+	langID, command, ok := serverForPath(path)
+	if !ok {
+		return ServerStatus{State: ServerNone}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if until, missing := m.unavailable[langID]; missing && time.Now().Before(until) {
+		return ServerStatus{LangID: langID, Command: command, State: ServerMissing}
+	}
+	if entry, ok := m.clients[langID]; ok {
+		switch entry.state {
+		case stateReady:
+			return ServerStatus{LangID: langID, Command: command, State: ServerReady}
+		case stateStarting:
+			return ServerStatus{LangID: langID, Command: command, State: ServerStarting}
+		case stateDisabled:
+			// ponytail: treat "previously disabled this window"
+			// as missing too — startServer re-arms unavailable on
+			// disable, so an entry here means the binary still
+			// can't be found.
+			return ServerStatus{LangID: langID, Command: command, State: ServerMissing}
+		case stateError:
+			return ServerStatus{LangID: langID, Command: command, State: ServerError}
+		}
+	}
+	return ServerStatus{LangID: langID, Command: command, State: ServerStarting}
+}
+
 // uriForPath converts an absolute or workspace-relative path into
 // a file:// URI that powernap expects.
 func uriForPath(p string) string {
