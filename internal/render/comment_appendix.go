@@ -8,12 +8,11 @@ import (
 )
 
 // excerptLimit is the cap on the inline excerpt shown in the
-// appendix and footnote lines; values past it are truncated with an
-// ellipsis.
+// appendix; values past it are truncated with an ellipsis.
 const excerptLimit = 40
 
 // truncate returns the first n runes of s, appending "…" when the
-// input is longer. Used for both the appendix and footnote excerpts.
+// input is longer.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -21,23 +20,48 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// FormatCommentsAppendix builds the appendix body string for a
-// set of comments. Empty comments slice → empty string.
+// flattenExcerpt prepares a quoted-text excerpt for the appendix:
+// internal newlines become a single space, runs of whitespace are
+// collapsed to one space, leading / trailing whitespace is trimmed.
+// The result is then truncated to excerptLimit chars (with "…") by
+// the caller.
+func flattenExcerpt(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	// Collapse runs of whitespace to a single space.
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		prevSpace = false
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// FormatCommentsAppendix builds the appendix body string for a set of
+// comments. Empty comments slice → empty string.
 //
 // Layout:
 //
-//	N comments:
-//	- block "<excerpt>" (lines X-Y): <text>
-//	- inline "<excerpt>" (line Z): <text>
+//	Comments on the message:
+//	- comment on "<excerpt>": <text>
+//
+//	Comments on files:
 //	- file "<path>" (lines X-Y): <text>
 //	- file-inline "<excerpt>" (line Z): <text>
 //
-// No leading separator: the caller composes "\n\n---\n" when (and
-// only when) there is preceding prose to separate from. The
-// comment-only flush path (submitAllComments) calls this function
-// directly and gets a body-only payload, so the agent never sees a
-// naked "---" as its first line.
-func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
+// No leading "---" separator; no count line. Sections with no entries
+// are omitted entirely. Two empty sections collapse to a single
+// blank line. Entries within each section are chronological (oldest
+// first) by CreatedAt.
+func FormatCommentsAppendix(comments []Comment) string {
 	if len(comments) == 0 {
 		return ""
 	}
@@ -45,94 +69,67 @@ func FormatCommentsAppendix(comments []Comment, blocks []Block) string {
 	slices.SortFunc(sorted, func(a, b Comment) int {
 		return cmp.Compare(a.CreatedAt.UnixNano(), b.CreatedAt.UnixNano())
 	})
-	var b strings.Builder
-	label := "comments"
-	if len(sorted) == 1 {
-		label = "comment"
-	}
-	b.WriteString(strconv.Itoa(len(sorted)))
-	b.WriteString(" ")
-	b.WriteString(label)
-	b.WriteString(":\n")
+
+	var msgLines, fileLines []string
 	for _, c := range sorted {
-		marker, excerpt, lineRange := formatEntry(c, blocks)
-
-		b.WriteString("- ")
-		b.WriteString(marker)
-		b.WriteString(" \"")
-		b.WriteString(excerpt)
-		b.WriteString("\"")
-		b.WriteString(lineRange)
-		b.WriteString(": ")
-		b.WriteString(c.Text)
-		b.WriteByte('\n')
+		switch c.Kind {
+		case CommentMessage:
+			msgLines = append(msgLines, formatMessageEntry(c))
+		case CommentFile:
+			fileLines = append(fileLines, formatFileEntry(c))
+		}
 	}
-	return b.String()
-}
 
-// formatEntry returns the marker, excerpt, and "(lines ...)" /
-// "(line ...)" segment for a single comment. Block-kind comments
-// pull their excerpt + line range from the rendered message's
-// blocks; file-kind comments use the comment's own Path and line
-// fields. The lineRange is "" when no range is available.
-func formatEntry(c Comment, blocks []Block) (marker, excerpt, lineRange string) {
-	inline := c.IsInlineSelection()
 	var b strings.Builder
-	switch c.Kind {
-	case CommentFile:
-		if inline {
-			marker = "file-inline"
-			excerpt = flatten(c.Source)
-		} else {
-			marker = "file"
-			excerpt = c.Path
-		}
-		if c.LineStart > 0 {
-			if c.LineStart == c.LineEnd {
-				b.WriteString(" (line ")
-				b.WriteString(strconv.Itoa(c.LineStart))
-				b.WriteString(")")
-			} else {
-				b.WriteString(" (lines ")
-				b.WriteString(strconv.Itoa(c.LineStart))
-				b.WriteString("-")
-				b.WriteString(strconv.Itoa(c.LineEnd))
-				b.WriteString(")")
-			}
-		}
-	default: // CommentBlock (zero value preserves legacy behaviour)
-		if inline {
-			marker = "inline"
-		} else {
-			marker = "block"
-		}
-		excerpt = c.Source
-		if !inline && c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
-			excerpt = blocks[c.BlockIdx].Source
-		}
-		excerpt = flatten(excerpt)
-		if c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
-			if inline {
-				b.WriteString(" (line ")
-				b.WriteString(strconv.Itoa(blocks[c.BlockIdx].StartLine))
-				b.WriteString(")")
-			} else {
-				b.WriteString(" (lines ")
-				b.WriteString(strconv.Itoa(blocks[c.BlockIdx].StartLine))
-				b.WriteString("-")
-				b.WriteString(strconv.Itoa(blocks[c.BlockIdx].EndLine))
-				b.WriteString(")")
-			}
+	if len(msgLines) > 0 {
+		b.WriteString("Comments on the message:\n")
+		for _, l := range msgLines {
+			b.WriteString(l)
+			b.WriteByte('\n')
 		}
 	}
-	excerpt = truncate(excerpt, excerptLimit)
-	return marker, excerpt, b.String()
+	if len(fileLines) > 0 {
+		if len(msgLines) > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString("Comments on files:\n")
+		for _, l := range fileLines {
+			b.WriteString(l)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
-// flatten trims and collapses internal newlines / tabs so the
-// excerpt fits on one line per the appendix contract.
-func flatten(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	return strings.TrimSpace(s)
+// formatMessageEntry renders a single message-kind comment as
+// `- comment on "<excerpt>": <text>`. The excerpt is the verbatim
+// source slice flattened (newlines → space, whitespace collapsed,
+// trimmed) and truncated to excerptLimit chars with "…" appended.
+func formatMessageEntry(c Comment) string {
+	excerpt := flattenExcerpt(c.Source)
+	excerpt = truncate(excerpt, excerptLimit)
+	return `- comment on "` + excerpt + `": ` + c.Text
+}
+
+// formatFileEntry renders a single file-kind comment in today's
+// format: `- file "<path>" (lines X-Y): <text>` for line-range
+// comments or `- file-inline "<excerpt>" (line Z): <text>` for
+// inline byte-range comments.
+func formatFileEntry(c Comment) string {
+	inline := c.ByteA > 0 || c.ByteC > 0
+	if inline {
+		excerpt := flattenExcerpt(c.Source)
+		excerpt = truncate(excerpt, excerptLimit)
+		if c.LineStart > 0 {
+			return `- file-inline "` + excerpt + `" (line ` + strconv.Itoa(c.LineStart) + `): ` + c.Text
+		}
+		return `- file-inline "` + excerpt + `": ` + c.Text
+	}
+	if c.LineStart > 0 && c.LineEnd > 0 && c.LineStart != c.LineEnd {
+		return `- file "` + c.Path + `" (lines ` + strconv.Itoa(c.LineStart) + `-` + strconv.Itoa(c.LineEnd) + `): ` + c.Text
+	}
+	if c.LineStart > 0 {
+		return `- file "` + c.Path + `" (line ` + strconv.Itoa(c.LineStart) + `): ` + c.Text
+	}
+	return `- file "` + c.Path + `": ` + c.Text
 }

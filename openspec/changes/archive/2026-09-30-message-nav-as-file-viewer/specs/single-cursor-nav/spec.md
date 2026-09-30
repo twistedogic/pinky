@@ -1,9 +1,6 @@
-# single-cursor-nav Specification
+# Spec Delta
 
-## Purpose
-TBD - created by archiving change vim-keymap. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Single cursor drives viewport and selection
 
@@ -287,6 +284,8 @@ The `Ctrl+S` binding SHALL NOT exist in `stateNav` or
   `Ctrl+S`
 - **THEN** the comment is saved with the current anchor and the
   TUI returns to `stateNav`
+
+## ADDED Requirements
 
 ### Requirement: Scroll keys move viewport only
 

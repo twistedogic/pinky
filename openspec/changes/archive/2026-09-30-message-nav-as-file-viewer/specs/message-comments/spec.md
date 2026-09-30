@@ -1,9 +1,6 @@
-# message-comments Specification
+# Spec Delta
 
-## Purpose
-TBD - created by archiving change add-block-and-inline-comments. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Block-level annotation via `c`
 
@@ -147,56 +144,6 @@ the cursor already lives in source-byte space.
   stored alongside the comment so the original text can be
   quoted in the redirect appendix
 
-### Requirement: Auto-scroll during cursor motion
-
-The system SHALL scroll the viewport when the cursor moves
-outside the visible range. In `stateNav`, when the cursor moves
-such that its rendered line is no longer inside the viewport's
-visible range, the viewport
-SHALL scroll so that the cursor's line sits inside the visible
-range with a 1-line cushion above and below. When the cursor
-moves within the visible range, the viewport SHALL be left
-alone.
-
-#### Scenario: Motion off-screen scrolls the viewport
-
-- **WHEN** the cursor moves (via `j`, `k`, `h`, `l`) such that
-  its rendered line is not inside `[YOffset, YOffset + Height)`
-- **THEN** `YOffset` is updated so the cursor's line is visible
-  with the 1-line cushion preserved
-
-#### Scenario: Motion within the visible range leaves YOffset alone
-
-- **WHEN** the cursor moves and its rendered line is already
-  inside `[YOffset, YOffset + Height)`
-- **THEN** `YOffset` is unchanged
-
-### Requirement: In-memory storage only
-
-Comments SHALL be stored in memory on the model and SHALL NOT be
-written to disk. When the assistant message content changes (the
-`latest.text` field is replaced by a new assistant message), all
-existing comments SHALL be discarded. When the TUI detaches from
-the session or quits, all comments SHALL be discarded.
-
-#### Scenario: New message clears comments
-
-- **WHEN** a new assistant message arrives and replaces the
-  currently-displayed message
-- **THEN** all existing comments are discarded and the rendered
-  view shows no comment footnotes or highlights
-
-#### Scenario: Detach clears comments
-
-- **WHEN** the TUI detaches from the current session
-- **THEN** all existing comments are discarded
-
-#### Scenario: Quit clears comments
-
-- **WHEN** the user quits the TUI
-- **THEN** no comment state is preserved; the next attach starts
-  with zero comments
-
 ### Requirement: Include comments in redirect
 
 While in compose state, pressing `i` SHALL toggle whether
@@ -238,102 +185,6 @@ there is at least one comment.
 - **THEN** the inject payload is exactly the redirect text (no
   appendix because the count is zero)
 
-### Requirement: Visual mode indicator chip
-
-While visual line mode is active the status line SHALL display a
-distinct "VISUAL" chip in addition to the normal status content,
-so the user has unambiguous feedback that `v` was registered. The
-chip SHALL use a high-contrast style (foreground `232`,
-background `51` — cyan — bold) so it stands out from the dim
-status background and is consistent with the cyan selection
-colour used by the document gutter.
-
-#### Scenario: `v` toggles indicator on
-
-- **WHEN** the user presses `v` in `stateNav`
-- **THEN** the status line shows the "VISUAL" indicator (cyan
-  background, dark foreground, bold) while visual mode is active
-
-#### Scenario: `Esc` clears indicator
-
-- **WHEN** the user presses `Esc` in visual mode
-- **THEN** the status line returns to its non-visual content (no
-  "VISUAL" chip)
-
-#### Scenario: Indicator does not appear outside visual mode
-
-- **WHEN** the TUI is in any non-visual state (nav, compose,
-  picker, error)
-- **THEN** the status line SHALL NOT show the "VISUAL" chip
-
-### Requirement: One-shot submit all comments via `s`
-
-Pressing `s` in `stateNav` SHALL dispatch every comment currently in
-`m.comments` as a single redirect through the existing inject
-pipeline, without requiring the user to enter compose mode or
-type any text. The redirect payload SHALL be exactly the
-comments appendix body (no leading user text and **no leading
-`---` separator** — `render.FormatCommentsAppendix` emits only
-the count line and entries). On successful send the comment
-slice SHALL be cleared; on inject failure the comments SHALL be
-kept so the user can retry and the error SHALL be surfaced via
-the same `[send failed: ...]` placeholder the compose path uses.
-
-This requirement is the **primary** send path for comments;
-`Enter` in the comment composer only stages (see `### Requirement:
-Block-level annotation via \`c\``).
-
-#### Scenario: `s` submits all accumulated comments
-
-- **WHEN** the user presses `s` in `stateNav` and there is at
-  least one comment
-- **THEN** the inject pipeline receives a payload equal to
-  `render.FormatCommentsAppendix(comments, blocks)`, the comment
-  slice is cleared, and no compose-mode interaction is required
-
-#### Scenario: `s` with no comments is a no-op
-
-- **WHEN** the user presses `s` in `stateNav` and the comment
-  slice is empty
-- **THEN** no inject call is made and no state changes
-
-#### Scenario: send failure keeps comments
-
-- **WHEN** the user presses `s` and the inject call returns an
-  error
-- **THEN** the comment slice is NOT cleared and the error is
-  surfaced via the same `[send failed: ...]` placeholder the
-  compose path uses
-
-### Requirement: Single-line comment composer
-
-The comment composer SHALL be a single-line textarea. `Enter` SHALL
-save the comment to memory and return to `stateNav` (see `###
-Requirement: Block-level annotation via \`c\``); `Enter` SHALL NOT
-insert a newline and SHALL NOT dispatch any comments to the agent.
-`Esc` SHALL cancel as before. Pasted text containing newlines SHALL
-be accepted verbatim and committed on `Enter`.
-
-#### Scenario: Enter saves without inserting a newline
-
-- **WHEN** the user is in comment composer state and presses `Enter`
-- **THEN** the composer is committed, the TUI returns to nav state,
-  and the saved comment text contains no newline characters
-
-#### Scenario: Enter does not dispatch any comments
-
-- **WHEN** the user is in comment composer state with text in
-  the textarea and presses `Enter`
-- **THEN** no `sendToPane` call is made — staging and sending
-  are decoupled
-
-#### Scenario: Pasted multiline text is committed on Enter
-
-- **WHEN** the user pastes text containing one or more newlines
-  into the comment composer and presses `Enter`
-- **THEN** the saved comment text contains the pasted newlines
-  verbatim and the TUI returns to nav state
-
 ### Requirement: Comment shape extended for file-kind comments
 
 The system SHALL extend the Comment struct with a Kind
@@ -367,25 +218,52 @@ content with optional `(byteA, byteC)` for inline byte ranges.
   `LineEnd == 24`, and `byteA`, `byteC` are `0` (line-range
   comment, no inline byte range)
 
-### Requirement: Unified flush path
+## REMOVED Requirements
 
-The system SHALL flush every comment in m.comments through a single inject call when the user presses s in any state where s is bound.
+### Requirement: Comment footnote rendering
+**Reason**: Footnote-below-block rendering is removed. Saved
+comments are now indicated by a line-direct yellow `▍` gutter
+on every source line touched by the comment's byte range (see
+Line-direct gutter for saved comments). No footnote text is
+rendered on the source.
+**Migration**: No user-facing migration. Comments are still
+visible in the comments appendix when sent via `s` (in nav) or
+appended to a redirect via the include flag (in compose). The
+on-source signal is now a yellow gutter per touched line.
 
-#### Scenario: `s` from file view flushes both kinds
+### Requirement: Border and comment highlight coexist
+**Reason**: The cyan `▍` focus gutter is gone (replaced by an
+inline block cursor at `charPos`, defined in `latest-message-
+view`). The yellow comment gutter is now line-direct (defined
+in Line-direct gutter for saved comments). The coexistence rule
+between cyan and yellow gutters has no referent.
+**Migration**: No user-facing migration. Comment presence is
+now indicated by the yellow gutter per touched line; cursor
+position is indicated by the inline block cursor at the byte
+the cursor points at.
 
-- **WHEN** `m.comments` contains one block-kind and one
-  file-kind comment and the user presses `s` in `stateFileView`
-- **THEN** a single `sendToPane` call is made with the
-  mixed-kind appendix as the payload, and the slice is cleared
-  on success
+### Requirement: Cursor drives the gutter highlight
+**Reason**: The cyan `▍` gutter highlight is removed (replaced
+by an inline block cursor at `charPos`). The cursor still
+drives the viewport (see Viewport follows cursor with a 1-line
+cushion in `single-cursor-nav`) but no longer drives a gutter.
+**Migration**: No user-facing migration. The cursor's byte
+position is rendered as the inline block cursor; no gutter is
+drawn for focus.
 
-#### Scenario: `s` flush failure keeps both kinds
+### Requirement: Appendix format covers both comment kinds
+**Reason**: Replaced by Comments appendix split by kind with new
+format, which drops the count line, splits the body into two
+labelled sections ("Comments on the message:" and "Comments on
+files:"), and formats message-kind entries as
+`- comment on "<excerpt>": <text>` (no line position).
+**Migration**: Agent-side: messages now reference comments by
+quoted text only, with section labels separating message-kind
+from file-kind comments. File-kind comments keep today's format
+(`- file "<path>" (lines X-Y): <text>` and
+`- file-inline "<excerpt>" (line Z): <text>`).
 
-- **WHEN** the user presses `s` and the inject call returns an
-  error
-- **THEN** neither the block-kind nor the file-kind comments
-  are cleared from `m.comments`; the error is surfaced via the
-  `[send failed: …]` placeholder
+## ADDED Requirements
 
 ### Requirement: Line-direct gutter for saved comments
 

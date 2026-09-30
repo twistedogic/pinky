@@ -2,87 +2,86 @@ package render
 
 import "testing"
 
-// navBlocks returns a 3-block index for nav tests. The block source
-// is the only thing that matters to NavHandle — the rendered-line
-// indices are only used by NavLineIndex.
-func navBlocks() []Block {
-	return []Block{
-		{Kind: BlockHeading, Source: "alpha", StartLine: 0, EndLine: 0},
-		{Kind: BlockParagraph, Source: "bravo charlie", StartLine: 2, EndLine: 4},
-		{Kind: BlockHeading, Source: "delta", StartLine: 6, EndLine: 6},
-	}
+// navLines returns a small source-line slice and its byte-offset
+// table for nav tests. The byte offsets follow the "+\n" rule: each
+// line occupies len(line)+1 bytes in the concatenated text (the +1
+// being the trailing newline).
+func navLines() ([]string, []int) {
+	lines := []string{"alpha", "bravo charlie", "delta"}
+	offsets := []int{0, 6, 20}
+	return lines, offsets
 }
 
-func TestNav_JMovesBlockCursor(t *testing.T) {
-	blocks := navBlocks()
+func TestNav_JMovesLineCursor(t *testing.T) {
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 1, CharPos: 0}
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
 	var sel NavSelection
-	if got := NavHandle('j', &st, &cur, &sel, blocks); got != ActionBlockDown {
+	if got := NavHandle('j', &st, &cur, &sel, lines, offsets); got != ActionBlockDown {
 		t.Errorf("action = %v want ActionBlockDown", got)
 	}
-	if cur.BlockIdx != 2 {
-		t.Errorf("BlockIdx = %d want 2", cur.BlockIdx)
+	if cur.LineIdx != 2 {
+		t.Errorf("LineIdx = %d want 2", cur.LineIdx)
 	}
 }
 
-func TestNav_KMovesBlockCursor(t *testing.T) {
-	blocks := navBlocks()
+func TestNav_KMovesLineCursor(t *testing.T) {
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 1, CharPos: 0}
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
 	var sel NavSelection
-	if got := NavHandle('k', &st, &cur, &sel, blocks); got != ActionBlockUp {
+	if got := NavHandle('k', &st, &cur, &sel, lines, offsets); got != ActionBlockUp {
 		t.Errorf("action = %v want ActionBlockUp", got)
 	}
-	if cur.BlockIdx != 0 {
-		t.Errorf("BlockIdx = %d want 0", cur.BlockIdx)
+	if cur.LineIdx != 0 {
+		t.Errorf("LineIdx = %d want 0", cur.LineIdx)
 	}
 }
 
-func TestNav_JClampsAtLastBlock(t *testing.T) {
-	blocks := navBlocks()
+func TestNav_JClampsAtLastLine(t *testing.T) {
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 2, CharPos: 0}
+	cur := NavCursor{LineIdx: 2, CharPos: 0}
 	var sel NavSelection
-	NavHandle('j', &st, &cur, &sel, blocks)
-	if cur.BlockIdx != 2 {
-		t.Errorf("BlockIdx should clamp at last block; got %d", cur.BlockIdx)
+	NavHandle('j', &st, &cur, &sel, lines, offsets)
+	if cur.LineIdx != 2 {
+		t.Errorf("LineIdx should clamp at last line; got %d", cur.LineIdx)
 	}
 }
 
-func TestNav_KClampsAtFirstBlock(t *testing.T) {
-	blocks := navBlocks()
+func TestNav_KClampsAtFirstLine(t *testing.T) {
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 0, CharPos: 0}
+	cur := NavCursor{LineIdx: 0, CharPos: 0}
 	var sel NavSelection
-	NavHandle('k', &st, &cur, &sel, blocks)
-	if cur.BlockIdx != 0 {
-		t.Errorf("BlockIdx should clamp at first block; got %d", cur.BlockIdx)
+	NavHandle('k', &st, &cur, &sel, lines, offsets)
+	if cur.LineIdx != 0 {
+		t.Errorf("LineIdx should clamp at first line; got %d", cur.LineIdx)
 	}
 }
 
 func TestNav_HLClampAtByteBoundaries(t *testing.T) {
-	blocks := navBlocks()
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 1, CharPos: 0}
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
 	var sel NavSelection
-	NavHandle('l', &st, &cur, &sel, blocks)
+	NavHandle('l', &st, &cur, &sel, lines, offsets)
 	if cur.CharPos != 1 {
 		t.Errorf("CharPos after l from 0 = %d want 1", cur.CharPos)
 	}
 	// "bravo charlie" is 13 bytes
 	for range 50 {
-		NavHandle('l', &st, &cur, &sel, blocks)
+		NavHandle('l', &st, &cur, &sel, lines, offsets)
 	}
 	if cur.CharPos != 13 {
-		t.Errorf("CharPos should clamp at len(Source); got %d want 13", cur.CharPos)
+		t.Errorf("CharPos should clamp at len(line); got %d want 13", cur.CharPos)
 	}
-	NavHandle('h', &st, &cur, &sel, blocks)
+	NavHandle('h', &st, &cur, &sel, lines, offsets)
 	if cur.CharPos != 12 {
 		t.Errorf("CharPos after h from 13 = %d want 12", cur.CharPos)
 	}
 	for range 50 {
-		NavHandle('h', &st, &cur, &sel, blocks)
+		NavHandle('h', &st, &cur, &sel, lines, offsets)
 	}
 	if cur.CharPos != 0 {
 		t.Errorf("CharPos should clamp at 0; got %d", cur.CharPos)
@@ -90,159 +89,146 @@ func TestNav_HLClampAtByteBoundaries(t *testing.T) {
 }
 
 func TestNav_VTogglesAndSeedsSelection(t *testing.T) {
-	blocks := navBlocks()
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 1, CharPos: 3}
+	cur := NavCursor{LineIdx: 1, CharPos: 3}
 	var sel NavSelection
-	if got := NavHandle('v', &st, &cur, &sel, blocks); got != ActionEnterVisual {
+	if got := NavHandle('v', &st, &cur, &sel, lines, offsets); got != ActionEnterVisual {
 		t.Errorf("action = %v want ActionEnterVisual", got)
 	}
 	if st.Visual != NavLine {
 		t.Errorf("Visual = %v want NavLine", st.Visual)
 	}
-	if sel.CharA != 3 || sel.CharC != 3 {
-		t.Errorf("selection = (%d,%d) want (3,3)", sel.CharA, sel.CharC)
+	wantA := byteOffset(offsets, 1, 3)
+	if sel.ByteA != wantA || sel.ByteC != wantA {
+		t.Errorf("selection byte = (%d, %d) want (%d, %d)", sel.ByteA, sel.ByteC, wantA, wantA)
 	}
-	if sel.BlockIdx != 1 {
-		t.Errorf("selection.BlockIdx = %d want 1", sel.BlockIdx)
-	}
-}
-
-func TestNav_VWhileVisualExits(t *testing.T) {
-	blocks := navBlocks()
-	st := NavState{Visual: NavLine}
-	cur := NavCursor{BlockIdx: 1, CharPos: 5}
-	sel := NavSelection{BlockIdx: 1, CharA: 2, CharC: 5}
-	if got := NavHandle('v', &st, &cur, &sel, blocks); got != ActionExitVisual {
-		t.Errorf("action = %v want ActionExitVisual", got)
-	}
-	if st.Visual != NavNone {
-		t.Errorf("Visual should be NavNone after second v")
+	if got := NavHandle('v', &st, &cur, &sel, lines, offsets); got != ActionExitVisual {
+		t.Errorf("second v action = %v want ActionExitVisual", got)
 	}
 	if sel != (NavSelection{}) {
-		t.Errorf("selection should be cleared after second v; got %+v", sel)
+		t.Errorf("selection should clear on visual exit; got %+v", sel)
 	}
 }
 
-func TestNav_EscWhileVisualExits(t *testing.T) {
-	blocks := navBlocks()
-	st := NavState{Visual: NavLine}
-	cur := NavCursor{BlockIdx: 1, CharPos: 5}
-	sel := NavSelection{BlockIdx: 1, CharA: 2, CharC: 5}
-	if got := NavHandle(0x1b, &st, &cur, &sel, blocks); got != ActionExitVisual {
-		t.Errorf("action = %v want ActionExitVisual", got)
+func TestNav_JInVisualUpdatesByteC(t *testing.T) {
+	lines, offsets := navLines()
+	var st NavState
+	cur := NavCursor{LineIdx: 0, CharPos: 0}
+	var sel NavSelection
+	NavHandle('v', &st, &cur, &sel, lines, offsets)
+	cur.CharPos = 2
+	NavHandle('l', &st, &cur, &sel, lines, offsets)
+	selBefore := sel.ByteC
+	NavHandle('j', &st, &cur, &sel, lines, offsets)
+	if sel.ByteC == selBefore {
+		t.Errorf("j in visual should change ByteC; got %d (was %d)", sel.ByteC, selBefore)
+	}
+}
+
+func TestNav_EscExitsVisual(t *testing.T) {
+	lines, offsets := navLines()
+	var st NavState
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
+	var sel NavSelection
+	NavHandle('v', &st, &cur, &sel, lines, offsets)
+	if got := NavHandle(0x1b, &st, &cur, &sel, lines, offsets); got != ActionExitVisual {
+		t.Errorf("Esc action = %v want ActionExitVisual", got)
 	}
 	if st.Visual != NavNone {
-		t.Errorf("Visual should be NavNone after Esc")
+		t.Errorf("Visual = %v want NavNone", st.Visual)
 	}
 }
 
-func TestNav_EscOutsideVisualIsNoop(t *testing.T) {
-	blocks := navBlocks()
+func TestNav_EscOutsideVisualIsNoOp(t *testing.T) {
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 0, CharPos: 0}
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
 	var sel NavSelection
-	if got := NavHandle(0x1b, &st, &cur, &sel, blocks); got != ActionNone {
-		t.Errorf("Esc outside visual = %v want ActionNone", got)
+	if got := NavHandle(0x1b, &st, &cur, &sel, lines, offsets); got != ActionNone {
+		t.Errorf("Esc outside visual action = %v want ActionNone", got)
 	}
 }
 
-func TestNav_CReturnsComment(t *testing.T) {
-	blocks := navBlocks()
+func TestNav_PreferredColumnOnShortLine(t *testing.T) {
+	lines, offsets := navLines()
 	var st NavState
-	cur := NavCursor{BlockIdx: 1, CharPos: 0}
+	// Move to long line "bravo charlie" (13 bytes) and walk to column 10
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
 	var sel NavSelection
-	if got := NavHandle('c', &st, &cur, &sel, blocks); got != ActionComment {
-		t.Errorf("action = %v want ActionComment", got)
+	for range 10 {
+		NavHandle('l', &st, &cur, &sel, lines, offsets)
+	}
+	if cur.CharPos != 10 {
+		t.Fatalf("setup: CharPos = %d want 10", cur.CharPos)
+	}
+	if cur.Preferred != 10 {
+		t.Fatalf("setup: Preferred = %d want 10", cur.Preferred)
+	}
+	// Move to "delta" (5 bytes) — CharPos should clamp to 5
+	NavHandle('j', &st, &cur, &sel, lines, offsets)
+	if cur.CharPos != 5 {
+		t.Errorf("CharPos on short line = %d want 5", cur.CharPos)
+	}
+	if cur.Preferred != 10 {
+		t.Errorf("Preferred unchanged by j; got %d want 10", cur.Preferred)
 	}
 }
 
-func TestNav_SQRNReturnActions(t *testing.T) {
-	blocks := navBlocks()
-	cases := []struct {
-		key  rune
-		want NavAction
-	}{
-		{'s', ActionSend},
-		{'q', ActionQuit},
-		{'r', ActionRefresh},
-		{'n', ActionCompose},
+func TestNav_PreferredColumnOnReturnToLongLine(t *testing.T) {
+	lines, offsets := navLines()
+	var st NavState
+	cur := NavCursor{LineIdx: 1, CharPos: 0}
+	var sel NavSelection
+	for range 10 {
+		NavHandle('l', &st, &cur, &sel, lines, offsets)
 	}
-	for _, c := range cases {
-		var st NavState
-		cur := NavCursor{BlockIdx: 0, CharPos: 0}
-		var sel NavSelection
-		if got := NavHandle(c.key, &st, &cur, &sel, blocks); got != c.want {
-			t.Errorf("key=%q action=%v want %v", c.key, got, c.want)
+	// j to "delta" then back to "bravo charlie"
+	NavHandle('j', &st, &cur, &sel, lines, offsets)
+	NavHandle('k', &st, &cur, &sel, lines, offsets)
+	if cur.LineIdx != 1 {
+		t.Fatalf("LineIdx = %d want 1", cur.LineIdx)
+	}
+	if cur.CharPos != 10 {
+		t.Errorf("CharPos on return = %d want 10", cur.CharPos)
+	}
+}
+
+func TestNav_HLeavesPreferredUnchanged(t *testing.T) {
+	lines, offsets := navLines()
+	var st NavState
+	cur := NavCursor{LineIdx: 1, CharPos: 10}
+	cur.Preferred = 10
+	var sel NavSelection
+	NavHandle('h', &st, &cur, &sel, lines, offsets)
+	if cur.Preferred != 10 {
+		t.Errorf("Preferred after h = %d want 10", cur.Preferred)
+	}
+}
+
+func TestNav_ByteOffsetRoundTrip(t *testing.T) {
+	lines, offsets := navLines()
+	for i := range lines {
+		got := byteOffset(offsets, i, 0)
+		if got != offsets[i] {
+			t.Errorf("byteOffset(%d, 0) = %d want %d", i, got, offsets[i])
 		}
 	}
 }
 
-func TestNav_UnknownKeyIsNoop(t *testing.T) {
-	blocks := navBlocks()
-	var st NavState
-	cur := NavCursor{BlockIdx: 1, CharPos: 5}
-	var sel NavSelection
-	if got := NavHandle('x', &st, &cur, &sel, blocks); got != ActionNone {
-		t.Errorf("unknown rune action=%v want ActionNone", got)
-	}
-	if cur.BlockIdx != 1 || cur.CharPos != 5 {
-		t.Errorf("cursor moved on unknown rune: (%d,%d)", cur.BlockIdx, cur.CharPos)
+func TestNav_RuneSnapLeft(t *testing.T) {
+	// "éclair" is multi-byte: e(1) + 'é'(2 bytes) + c(1) + l(1) + a(1) + i(1) + r(1) = 8 bytes
+	// runeStart at byte 4 should land at byte 3 (start of 'c')
+	got := runeStart("éclair", 4)
+	if got != 3 {
+		t.Errorf("runeStart = %d want 3", got)
 	}
 }
 
-func TestNav_HLInVisualExtendsSelection(t *testing.T) {
-	blocks := navBlocks()
-	st := NavState{Visual: NavLine}
-	cur := NavCursor{BlockIdx: 1, CharPos: 2}
-	sel := NavSelection{BlockIdx: 1, CharA: 2, CharC: 2}
-	NavHandle('l', &st, &cur, &sel, blocks)
-	if sel.CharC != 3 {
-		t.Errorf("after l in visual: CharC=%d want 3", sel.CharC)
-	}
-	NavHandle('h', &st, &cur, &sel, blocks)
-	if sel.CharC != 2 {
-		t.Errorf("after h back in visual: CharC=%d want 2", sel.CharC)
-	}
-}
-
-func TestNavLineIndex_StartOfBlock(t *testing.T) {
-	blocks := navBlocks()
-	cur := NavCursor{BlockIdx: 0, CharPos: 0}
-	if got := NavLineIndex(blocks, cur); got != 0 {
-		t.Errorf("NavLineIndex at block 0 start = %d want 0", got)
-	}
-}
-
-func TestNavLineIndex_MidBlockAdvancesLine(t *testing.T) {
-	blocks := []Block{
-		{Kind: BlockParagraph, Source: "line one\nline two\nline three", StartLine: 0, EndLine: 2},
-	}
-	// "line one\n" is 9 bytes; charPos=9 (start of "line two") lands on line 1.
-	cur := NavCursor{BlockIdx: 0, CharPos: 9}
-	if got := NavLineIndex(blocks, cur); got != 1 {
-		t.Errorf("NavLineIndex at line 2 = %d want 1", got)
-	}
-}
-
-func TestNavLineIndex_PastEndClampsToEndLine(t *testing.T) {
-	blocks := []Block{
-		{Kind: BlockParagraph, Source: "alpha\nbravo", StartLine: 0, EndLine: 1},
-	}
-	cur := NavCursor{BlockIdx: 0, CharPos: 9999}
-	if got := NavLineIndex(blocks, cur); got != 1 {
-		t.Errorf("NavLineIndex past-end = %d want 1", got)
-	}
-}
-
-func TestNavLineIndex_OutOfRangeIsZero(t *testing.T) {
-	blocks := navBlocks()
-	cur := NavCursor{BlockIdx: -1, CharPos: 0}
-	if got := NavLineIndex(blocks, cur); got != 0 {
-		t.Errorf("NavLineIndex out-of-range = %d want 0", got)
-	}
-	cur = NavCursor{BlockIdx: 99, CharPos: 0}
-	if got := NavLineIndex(blocks, cur); got != 0 {
-		t.Errorf("NavLineIndex out-of-range = %d want 0", got)
+func TestNav_RuneAdvance(t *testing.T) {
+	// runeAdvance at byte 0 should jump over 'é' (2 bytes) to byte 2
+	got := runeAdvance("éclair", 0)
+	if got != 2 {
+		t.Errorf("runeAdvance(0) = %d want 2", got)
 	}
 }

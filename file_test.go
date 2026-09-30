@@ -292,8 +292,8 @@ func TestFileView_CommentWholeLine(t *testing.T) {
 	if c0.LineStart != 1 || c0.LineEnd != 1 {
 		t.Errorf("expected line range 1-1 (current line); got %d-%d", c0.LineStart, c0.LineEnd)
 	}
-	if c0.CharStart != -1 || c0.CharEnd != -1 {
-		t.Errorf("expected char range -1/-1 (no inline); got %d/%d", c0.CharStart, c0.CharEnd)
+	if c0.ByteA != -1 || c0.ByteC != -1 {
+		t.Errorf("expected byte range 0/0 (no inline); got %d/%d", c0.ByteA, c0.ByteC)
 	}
 }
 
@@ -333,8 +333,8 @@ func TestFileView_CommentSelection(t *testing.T) {
 
 // TestFileView_CommentInlineCharRange: in the file viewer with
 // visual mode and a single-line inline selection (`v` then `l`
-// several times), `c` saves a file-kind comment with CharStart
-// /CharEnd set to the byte offsets.
+// several times), `c` saves a file-kind comment with ByteA
+// /ByteC set to the byte offsets.
 func TestFileView_CommentInlineCharRange(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
@@ -364,8 +364,8 @@ func TestFileView_CommentInlineCharRange(t *testing.T) {
 	if c0.LineStart != 1 || c0.LineEnd != 1 {
 		t.Errorf("expected single-line selection; got %d-%d", c0.LineStart, c0.LineEnd)
 	}
-	if c0.CharStart != 0 || c0.CharEnd != 3 {
-		t.Errorf("expected char range 0-3; got %d-%d", c0.CharStart, c0.CharEnd)
+	if c0.ByteA != 0 || c0.ByteC != 3 {
+		t.Errorf("expected char range 0-3; got %d-%d", c0.ByteA, c0.ByteC)
 	}
 	if c0.Source != "alp" {
 		t.Errorf("expected source excerpt 'alp'; got %q", c0.Source)
@@ -386,9 +386,9 @@ func TestUnifiedFlush_SendsAllKinds(t *testing.T) {
 	m.refreshViewport()
 	initCommentTAForTest(&m)
 	m.comments = append(m.comments,
-		render.Comment{Kind: render.CommentBlock, BlockIdx: 0, CharStart: -1, Text: "block note", CreatedAt: time.Now()},
+		render.Comment{Kind: render.CommentMessage, ByteA: 0, ByteC: 0, Text: "block note", CreatedAt: time.Now()},
 		render.Comment{Kind: render.CommentFile, Path: "src/main.go", LineStart: 1, LineEnd: 3,
-			CharStart: -1, CharEnd: -1, Text: "file note", CreatedAt: time.Now().Add(time.Second)},
+			ByteA: 0, ByteC: 0, Text: "file note", CreatedAt: time.Now().Add(time.Second)},
 	)
 	s := tea.KeyPressMsg{Code: 's', Text: "s"}
 	updated, _ := m.Update(s)
@@ -396,7 +396,7 @@ func TestUnifiedFlush_SendsAllKinds(t *testing.T) {
 	if sent == "" {
 		t.Fatal("expected sendToPane to be called")
 	}
-	for _, want := range []string{"2 comments:", "block", "file", "src/main.go", "block note", "file note"} {
+	for _, want := range []string{"Comments on the message:", "comment on", "Comments on files:", "file", "src/main.go", "block note", "file note"} {
 		if !strings.Contains(sent, want) {
 			t.Errorf("missing %q in payload:\n%s", want, sent)
 		}
@@ -930,18 +930,18 @@ func TestFileView_WholeFileCommentUsesLineRange(t *testing.T) {
 	if m.state != stateCommentComposer {
 		t.Fatalf("after c: expected stateCommentComposer; got %v", m.state)
 	}
-	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+	if m.commentAnchor.byteA != -1 || m.commentAnchor.byteC != -1 {
 		t.Errorf("whole-file anchor should have charA=charC=-1 (line range); got (%d,%d)",
-			m.commentAnchor.charA, m.commentAnchor.charC)
+			m.commentAnchor.byteA, m.commentAnchor.byteC)
 	}
 
 	m.commentTa.SetValue("rename alpha")
 	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = upd.(model)
 	c0 := m.comments[0]
-	if c0.CharStart != -1 || c0.CharEnd != -1 {
-		t.Errorf("saved whole-file comment should have CharStart=CharEnd=-1; got (%d,%d)",
-			c0.CharStart, c0.CharEnd)
+	if c0.ByteA != -1 || c0.ByteC != -1 {
+		t.Errorf("saved whole-file comment should have ByteA=ByteC=-1; got (%d,%d)",
+			c0.ByteA, c0.ByteC)
 	}
 	if c0.Source != "" {
 		t.Errorf("saved whole-file comment should have empty Source; got %q", c0.Source)
@@ -983,9 +983,9 @@ func TestFileNav_WholeFileCommentUsesLineRange(t *testing.T) {
 	if m.state != stateCommentComposer {
 		t.Fatalf("after c: expected stateCommentComposer; got %v", m.state)
 	}
-	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+	if m.commentAnchor.byteA != -1 || m.commentAnchor.byteC != -1 {
 		t.Errorf("file-nav whole-file anchor should have charA=charC=-1; got (%d,%d)",
-			m.commentAnchor.charA, m.commentAnchor.charC)
+			m.commentAnchor.byteA, m.commentAnchor.byteC)
 	}
 }
 
@@ -1002,9 +1002,9 @@ func TestFileView_VisualMultiLineStaysLineRange(t *testing.T) {
 	m = upd.(model)
 	upd, _ = m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = upd.(model)
-	if m.commentAnchor.charA != -1 || m.commentAnchor.charC != -1 {
+	if m.commentAnchor.byteA != -1 || m.commentAnchor.byteC != -1 {
 		t.Errorf("multi-line visual should stay line-range; got charA=%d charC=%d",
-			m.commentAnchor.charA, m.commentAnchor.charC)
+			m.commentAnchor.byteA, m.commentAnchor.byteC)
 	}
 	if m.commentAnchor.lineStart != 1 || m.commentAnchor.lineEnd != 2 {
 		t.Errorf("multi-line visual (line 1 + j to 2) should give 1..2; got %d..%d",

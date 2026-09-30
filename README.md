@@ -107,18 +107,27 @@ markdown. Within that message:
 
 | Key | Action |
 |---|---|
-| `j` / `↓` | Next block |
-| `k` / `↑` | Previous block |
-| `h` / `l` | Move one rune left / right inside the current block |
+| `j` | Move cursor to next source line |
+| `k` | Move cursor to previous source line |
+| `h` / `l` | Move cursor one rune left / right within the current source line |
 | `v` | Enter visual mode (toggle; `v` again exits) |
 | `Esc` | Exit visual mode |
-| `c` | Open the comment composer (anchored to selection, or whole block) |
+| `c` | Open the comment composer (anchored to selection, or whole current line) |
 | `s` | Send all accumulated comments in one tmux inject |
 | `n` | Enter compose mode |
 | `r` | Re-poll the agent session |
 | `Tab` | Switch to the file review tab |
 | `q` / `Ctrl+C` | Quit |
 | `?` | Toggle the keymap page |
+| `↓` / `↑` | Scroll viewport one line (cursor unchanged) |
+| `PageDown` / `PageUp` | Scroll viewport one page (cursor unchanged) |
+| `Home` / `End` | Scroll viewport to top / bottom (cursor unchanged) |
+
+Scroll keys (`↑`/`↓`/`PageDown`/`PageUp`/`Home`/`End`) move the
+viewport only — the cursor does not change. `j`/`k` move the
+cursor and the viewport follows with a 1-line cushion. The
+focused byte is rendered as an inverted-block cursor at the
+cursor's `charPos`.
 
 ### File review tab
 
@@ -196,6 +205,24 @@ When the anchor came from a file, the saved comment is a
 - `- file-inline "<excerpt>" (line Z): <text>` — inline byte
   selection from a visual-mode `c`
 
+When the anchor came from the message view, the saved comment is a
+`comment on "<excerpt>": <text>` entry in the appendix. Excerpts
+are truncated to 40 characters with `…`, with internal newlines
+replaced by single spaces and runs of whitespace collapsed. The
+appendix is split into two sections by comment kind:
+
+```
+Comments on the message:
+- comment on "<excerpt>": <text>
+
+Comments on files:
+- file "<path>" (lines X-Y): <text>
+- file-inline "<excerpt>" (line Z): <text>
+```
+
+The leading count line is omitted; the two sections are emitted
+only when there is at least one entry of that kind.
+
 ### Picker
 
 | Key | Action |
@@ -206,10 +233,10 @@ When the anchor came from a file, the saved comment is a
 | `q` | Quit |
 | `Ctrl+C` | Quit |
 
-The currently-focused block carries a cyan `▍` left-gutter on every
-rendered line within its `StartLine..EndLine` range; commented
-blocks additionally receive a yellow gutter tint and a footnote line
-below the block.
+The cursor's byte position is rendered as an inverted-block cursor
+at the cursor's `charPos` on the rendered line. Source lines
+touched by a saved comment carry a yellow `▍` (228) in the
+left-margin column; no other gutter or border is drawn.
 
 ## History
 

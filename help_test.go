@@ -134,8 +134,8 @@ func TestSubmitComments_ClearsOnSuccess(t *testing.T) {
 	m.refreshViewport()
 
 	m.comments = []render.Comment{
-		{BlockIdx: 0, Text: "fix the title", CreatedAt: time.Now()},
-		{BlockIdx: 1, Text: "expand the body", CreatedAt: time.Now().Add(time.Second)},
+		{ByteA: 0, ByteC: 0, Text: "fix the title", CreatedAt: time.Now()},
+		{ByteA: 0, ByteC: 0, Text: "expand the body", CreatedAt: time.Now().Add(time.Second)},
 	}
 
 	var sentPane, sentText string
@@ -187,10 +187,9 @@ func TestSubmitComments_NoCommentsNoop(t *testing.T) {
 	}
 }
 
-// TestVisual_JMovesCursorAcrossBlocks: in nav mode, `j` advances
-// the cursor to the next block and the cyan left-gutter follows.
-// Per design D1 the cursor is the single source of truth — no
-// separate visual.cursor.
+// TestVisual_JMovesCursorAcrossLines: in nav mode, `j` advances
+// the cursor to the next source line. Per design D1 the cursor
+// is the single source of truth — no separate visual.cursor.
 func TestVisual_JMovesCursorAcrossBlocks(t *testing.T) {
 	m := newIdleModelForKeymap(t)
 	m.state = stateNav
@@ -199,40 +198,15 @@ func TestVisual_JMovesCursorAcrossBlocks(t *testing.T) {
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "# alpha\n\nbody one\n\n## beta\n\nbody two"}
 	m.refreshViewport()
 	m.reflow()
-	if len(m.blocks) < 3 {
-		t.Fatalf("setup: expected at least 3 blocks, got %d", len(m.blocks))
+	if len(m.lines) < 3 {
+		t.Fatalf("setup: expected at least 3 blocks, got %d", len(m.lines))
 	}
-	startBlock := m.cursor.BlockIdx
+	startLine := m.cursor.LineIdx
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updated.(model)
-	if m.cursor.BlockIdx <= startBlock {
-		t.Errorf("j did not advance cursor block: before=%d after=%d", startBlock, m.cursor.BlockIdx)
-	}
-
-	// Cyan left-gutter (▍) follows the cursor's block — every line
-	// inside the new block starts with ▍, the previous block's
-	// lines do not. Block line indices are relative to the rendered
-	// markdown; the top header (cwd + pending count) occupies the
-	// first headerHeight lines of the View, so offset by that.
-	plain := stripANSI(m.View().Content)
-	focused := m.blocks[m.cursor.BlockIdx]
-	prev := m.blocks[startBlock]
-	off := m.headerHeight
-	for i := focused.StartLine; i <= focused.EndLine; i++ {
-		line := lineAt(plain, i+off)
-		if !strings.HasPrefix(line, "▍") {
-			t.Errorf("focused block line %d should start with ▍ gutter; got %q", i+off, line)
-		}
-	}
-	for i := prev.StartLine; i <= prev.EndLine; i++ {
-		if i >= focused.StartLine && i <= focused.EndLine {
-			continue
-		}
-		line := lineAt(plain, i+off)
-		if strings.HasPrefix(line, "▍") {
-			t.Errorf("previous block line %d should NOT start with ▍ (focus moved); got %q", i+off, line)
-		}
+	if m.cursor.LineIdx <= startLine {
+		t.Errorf("j did not advance cursor line: before=%d after=%d", startLine, m.cursor.LineIdx)
 	}
 }
 
@@ -253,15 +227,15 @@ func TestVisual_VEnterThenJ_KeepsVisualActive(t *testing.T) {
 	if m.nav.Visual != render.NavLine {
 		t.Fatal("v should enter visual")
 	}
-	before := m.cursor.BlockIdx
+	before := m.cursor.LineIdx
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updated.(model)
 	if m.nav.Visual != render.NavLine {
 		t.Errorf("j in visual should keep visual active; got %v", m.nav.Visual)
 	}
-	if m.cursor.BlockIdx <= before {
-		t.Errorf("j did not advance cursor: before=%d after=%d", before, m.cursor.BlockIdx)
+	if m.cursor.LineIdx <= before {
+		t.Errorf("j did not advance cursor: before=%d after=%d", before, m.cursor.LineIdx)
 	}
 }
 

@@ -141,7 +141,7 @@ func TestView_StateCompose_ShowsIncludeChip(t *testing.T) {
 	m.state = stateCompose
 	m.enterCompose()
 	m.comments = []render.Comment{
-		{BlockIdx: 0, Text: "c1", CreatedAt: time.Now()},
+		{ByteA: 0, ByteC: 0, Text: "c1", CreatedAt: time.Now()},
 	}
 	m.includeComments = true
 	m.width = 80
@@ -165,7 +165,7 @@ func TestStatusLine_SlimmedOmitsPaneAndCommentCount(t *testing.T) {
 	m.state = stateNav
 	m.pane = "%12"
 	m.comments = []render.Comment{
-		{BlockIdx: 0, Text: "c1", CreatedAt: time.Now()},
+		{ByteA: 0, ByteC: 0, Text: "c1", CreatedAt: time.Now()},
 	}
 	m.width = 80
 

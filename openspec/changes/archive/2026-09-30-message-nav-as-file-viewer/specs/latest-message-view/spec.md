@@ -1,28 +1,6 @@
-# latest-message-view Specification
+# Spec Delta
 
-## Purpose
-TBD - created by archiving change focus-latest-message. Update Purpose after archive.
-
-## Requirements
-
-### Requirement: Show latest complete agent message
-The system SHALL display only the most recent assistant message in the main view. Older assistant messages and prior conversation history SHALL NOT be displayed. When a new assistant message is surfaced, the view SHALL be replaced with the new message.
-
-#### Scenario: First message arrives
-- **WHEN** pinky is attached to a session and the agent produces its first assistant message
-- **THEN** the message appears in the main view
-
-#### Scenario: New message replaces the previous
-- **WHEN** a second assistant message is surfaced while a first is already shown
-- **THEN** the main view is replaced with the second message and the first is no longer displayed
-
-#### Scenario: Empty state before any message
-- **WHEN** pinky is attached to a session and no assistant message has been surfaced yet
-- **THEN** the main view shows a "waiting for agent…" placeholder
-
-#### Scenario: Polling yields no new content
-- **WHEN** the agent session is polled and no new assistant text has been surfaced
-- **THEN** the main view is unchanged
+## MODIFIED Requirements
 
 ### Requirement: Display assistant text as raw markdown source
 The system SHALL display the assistant message text as raw
@@ -141,41 +119,6 @@ viewport scrolls to keep it visible with a 1-line cushion.
 - **THEN** the viewport's `YOffset` becomes `0` and the cursor's
   `(lineIdx, charPos, preferred)` is unchanged
 
-### Requirement: Yank to bottom on new content
-The system SHALL keep the viewport pinned to the bottom of the rendered
-message while the user is at the bottom, and SHALL release the pin the
-moment the user scrolls up. While the pin is released, polling the agent
-session and receiving new text SHALL NOT change the viewport's vertical
-position — the user stays where they scrolled. The pin SHALL re-attach
-automatically as soon as the user scrolls back to the bottom (so the next
-poll resumes auto-follow). A new assistant message that replaces the
-current one (a different `Text` from the prior `m.latest`) SHALL always
-force-attach the pin so the new content is visible.
-
-#### Scenario: Auto-follow while at the bottom
-- **WHEN** the viewport's `YOffset` is at the bottom of the rendered
-  message and a poll brings appended text to the same message
-- **THEN** the viewport scrolls so the new last line sits at the bottom
-  of the viewport
-
-#### Scenario: Scrolled-up user is not yanked back
-- **WHEN** the user has scrolled the viewport up (away from the bottom)
-  and a poll brings appended text to the same message
-- **THEN** the viewport's `YOffset` is unchanged; the user remains at
-  their scroll position and the new text accumulates off-screen below
-
-#### Scenario: Return to bottom re-attaches the pin
-- **WHEN** the user scrolls back to the bottom (e.g. via `End`) and a
-  subsequent poll brings appended text to the same message
-- **THEN** the viewport scrolls so the new last line sits at the bottom
-  of the viewport
-
-#### Scenario: New message always scrolls to bottom
-- **WHEN** a poll surfaces an assistant message whose `Text` differs
-  from `m.latest.Text`
-- **THEN** the viewport scrolls to the bottom of the new message
-  regardless of the previous scroll position
-
 ### Requirement: Render comment annotations as overlay
 The latest-message view SHALL be capable of rendering comment
 annotations on top of the rendered assistant message. The
@@ -219,98 +162,26 @@ line gutter.
   are re-applied without loss; no annotation references a stale
   line index from the previous width
 
-### Requirement: Always-visible help footer
-The latest-message view SHALL render a one-line keymap footer at
-the bottom of every state's view (`s` picker / nav / compose /
-comment-composer / error). Pressing `?` SHALL expand the footer
-into a multi-column full-help view; pressing `?` again SHALL
-collapse it back. The footer SHALL be sourced from the bubbles
-`help.Model` package and SHALL satisfy the `help.KeyMap` interface
-with state-aware `ShortHelp()` and `FullHelp()` methods. The
-viewport SHALL be shortened by the footer's height so the footer
-never overlaps the message content.
+## REMOVED Requirements
 
-#### Scenario: Nav view shows short help
-- **WHEN** the TUI is in nav state
-- **THEN** the bottom of the view contains a one-line keymap
-  footer listing the most relevant keys for the current state
+### Requirement: Block focus indicator
+**Reason**: The cyan `▍` focus gutter is replaced by an inline
+block cursor at `charPos` (see Inline block cursor at charPos).
+The cursor's byte position is now the focus signal; no per-line
+or per-block gutter is drawn for focus.
+**Migration**: No user-facing migration. The cyan gutter is
+removed; the inline cursor at the byte the cursor points at is
+the new focus indicator.
 
-#### Scenario: ? expands to full help
-- **WHEN** the user presses `?` in any state
-- **THEN** the footer expands into a multi-column full-help view
-  showing every keybinding for the current state, grouped by
-  category; pressing `?` again collapses it back to the short
-  footer
+### Requirement: Build markdown block index
+**Reason**: The markdown block index is no longer needed for
+navigation or rendering. Block-derived gutters and the
+footnote-below-block are replaced by line-direct rendering; the
+`j`/`k` motion keys move by source line, not by block. The
+markdown AST parser is removed.
+**Migration**: No user-facing migration.
 
-#### Scenario: Help footer reserves viewport space
-- **WHEN** the footer is shown
-- **THEN** the message viewport is shortened by the footer's
-  height so the footer never overlaps the message content
-
-#### Scenario: Compose and error states also show help
-- **WHEN** the TUI is in compose / comment-composer / error /
-  picker state
-- **THEN** the help footer is still rendered at the bottom of the
-  view with state-appropriate bindings
-
-### Requirement: Manual refresh via `r` after attach
-
-After the one-shot `Init()` poll has resolved, the system SHALL NOT
-poll the watched agent session on a timer. The only way for the user
-to surface new assistant text in the main view after attach SHALL be
-by pressing `r` in `stateNav`. Each `r` press SHALL trigger exactly
-one fetch from the session source. After that fetch resolves, the
-system SHALL return to idle with no further `tea.Tick` scheduled.
-
-The `Init()` poll SHALL fire within 500 ms of attach so the main view
-is populated before the user can reasonably press any key. If the
-`Init()` poll resolves with no assistant message, the main view SHALL
-remain on its "waiting for agent…" placeholder until the user presses
-`r` and a subsequent fetch surfaces a message.
-
-A `r` press that resolves with the same assistant text as the
-current `m.latest` (i.e. the session source has nothing new) SHALL be
-a no-op: `m.latest` is unchanged, `m.comments` is preserved, and the
-viewport position is preserved.
-
-A `r` press that resolves with a different assistant text SHALL
-replace `m.latest`, clear `m.comments` (so any annotations on the
-prior message do not leak into the new one), and re-render the
-viewport.
-
-#### Scenario: `Init()` fires one warm-up poll
-- **WHEN** pinky enters `stateNav` from attach
-- **THEN** the system returns exactly one `pollCmd(m.src)` from
-  `Init()` and does not schedule any further tick from the resulting
-  `sessionMsg` handler
-
-#### Scenario: `r` press is the only post-attach fetch trigger
-- **WHEN** the user is in `stateNav` and the `Init()` poll has
-  already resolved
-- **THEN** pressing `r` returns exactly one `pollCmd(m.src)` from
-  `handleNavKey`'s `ActionRefresh` branch, and the `sessionMsg`
-  handler does not schedule a follow-up poll
-
-#### Scenario: `r` with no new content is a true no-op
-- **WHEN** the user presses `r` and the session source returns no
-  new assistant messages
-- **THEN** `m.latest.Text` is unchanged, `m.comments` retains every
-  previously-saved annotation, and the viewport's `YOffset` is
-  unchanged
-
-#### Scenario: `r` with new content replaces `m.latest` and clears comments
-- **WHEN** the user presses `r` and the session source returns a
-  assistant message whose `Text` differs from `m.latest.Text`
-- **THEN** `m.latest` is replaced with the new message,
-  `m.comments` is set to `nil`, the viewport is re-rendered, and the
-  viewport is pinned to the top (per "New message always scrolls to
-  bottom")
-
-#### Scenario: `r` while a session error is active
-- **WHEN** the user presses `r` and the session source returns an
-  error
-- **THEN** the error is surfaced via the existing error-handling
-  path and no follow-up poll is scheduled
+## ADDED Requirements
 
 ### Requirement: Inline block cursor at charPos
 

@@ -139,7 +139,7 @@ func TestSessionMsg_TextChangeClearsComments(t *testing.T) {
 	// Pre-populate with comments on a "previous" message.
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "previous message"}
 	m.comments = []render.Comment{
-		{BlockIdx: 0, Text: "old comment"},
+		{ByteA: 0, ByteC: 0, Text: "old comment"},
 	}
 
 	// New message arrives — commits immediately and clears comments.
@@ -158,7 +158,7 @@ func TestSessionMsg_SameMsgKeepsComments(t *testing.T) {
 	src := &fakeSource{}
 	m := newIdleModel(t, src)
 	m.latest = session.Message{Role: session.RoleAssistant, Text: "same"}
-	m.comments = []render.Comment{{BlockIdx: 0, Text: "kept"}}
+	m.comments = []render.Comment{{ByteA: 0, ByteC: 0, Text: "kept"}}
 
 	// Empty poll with nothing pending — no commit, comments stay.
 	updated, _ := m.Update(sessionMsg{entries: nil})

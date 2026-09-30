@@ -229,8 +229,8 @@ func TestFileView_CommentSingleLinePointVisualFallsBackToWholeLine(t *testing.T)
 	if a.lineStart != 1 || a.lineEnd != 1 {
 		t.Errorf("expected line range 1-1; got %d-%d", a.lineStart, a.lineEnd)
 	}
-	if a.charA != -1 || a.charC != -1 {
-		t.Errorf("expected char range -1/-1 (whole-line); got %d/%d", a.charA, a.charC)
+	if a.byteA != -1 || a.byteC != -1 {
+		t.Errorf("expected byte range 0/0 (whole-line); got %d/%d", a.byteA, a.byteC)
 	}
 }
 
@@ -271,8 +271,8 @@ func TestFileView_CommentMultiLinePointVisualYieldsLineRange(t *testing.T) {
 	if a.lineStart != 5 || a.lineEnd != 7 {
 		t.Errorf("expected line range 5-7; got %d-%d", a.lineStart, a.lineEnd)
 	}
-	if a.charA != -1 || a.charC != -1 {
-		t.Errorf("expected char range -1/-1 (multi-line collapsed); got %d/%d", a.charA, a.charC)
+	if a.byteA != -1 || a.byteC != -1 {
+		t.Errorf("expected byte range 0/0 (multi-line collapsed); got %d/%d", a.byteA, a.byteC)
 	}
 }
 

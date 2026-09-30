@@ -53,16 +53,13 @@ type sessionMsg struct {
 }
 
 // commentAnchor captures the target for a comment being composed.
-// For block-kind anchors blockIdx, charA, charC are valid (with
-// charA < 0 meaning a whole-block comment). For file-kind anchors
-// filePath, lineStart, lineEnd are valid; charA/charC carry an
-// optional inline byte range (charA < 0 means a line-range
-// comment).
+// Message-kind anchors use byteA, byteC over m.latest.Text. File-kind
+// anchors use filePath, lineStart, lineEnd with optional byteA/byteC
+// inline range (0 means line-range only).
 type commentAnchor struct {
 	kind      render.CommentKind
-	blockIdx  int
-	charA     int
-	charC     int
+	byteA     int
+	byteC     int
 	filePath  string
 	lineStart int
 	lineEnd   int
@@ -155,10 +152,11 @@ type model struct {
 
 	// Latest-message view state. pinky always renders the most recent
 	// assistant message; older messages are not displayed.
-	latest        session.Message
-	blocks        []render.Block
-	wrappedToSrc  []int // viewport yOffset → source-line index, for nav
-	sourceToFirst []int // source-line index → first wrapped yOffset, for nav
+	latest session.Message
+	lines []string // "\n"-split source of m.latest.Text, 0-based
+	lineStartOffsets []int // lines[i]'s first byte in m.latest.Text
+	wrappedToSrc []int     // viewport yOffset → source-line index, for nav
+	sourceToFirst []int    // source-line index → first wrapped yOffset, for nav
 
 	viewport viewport.Model
 	textarea textarea.Model
@@ -167,15 +165,18 @@ type model struct {
 
 	streaming bool
 
-	// Comments slice (block + inline). Lives on the model; cleared
-	// when the latest message text changes or attach() runs.
+	// Comments slice (message-kind + file-kind). Lives on the model;
+	// cleared when the latest message text changes or attach() runs.
 	comments []render.Comment
 
-	// cursor is the single nav pointer. BlockIdx into m.blocks;
-	// CharPos is a byte offset into blocks[BlockIdx].Source.
+	// cursor is the single nav pointer. LineIdx is 1-based into
+	// m.lines; CharPos is a byte offset into lines[LineIdx];
+	// Preferred is the rightmost column reached by `l`, survives
+	// `j`/`k` (matches the file viewer's preferred-column tracker).
 	cursor render.NavCursor
 	// selection tracks the inline visual selection range. Valid only
-	// when nav.Visual == render.NavLine.
+	// when nav.Visual == render.NavLine. ByteA is the anchor byte
+	// (set by `v`); ByteC is the cursor byte (updated by motion).
 	selection render.NavSelection
 	// nav is the nav state machine state.
 	nav render.NavState
@@ -219,7 +220,7 @@ type model struct {
 	// doesn't leak between modes.
 	commentTa textarea.Model
 
-	// commentAnchor captures the (block, charA, charC) for the next
+	// commentAnchor captures the (byteA, byteC) for the next
 	// comment. CharStart/End are derived when saving (CharStart ==
 	// CharEnd == -1 means block-level).
 	commentAnchor commentAnchor
@@ -263,13 +264,10 @@ type model struct {
 // cursorOnScreen returns true when the cursor's rendered line is
 // within the viewport's visible range.
 func (m *model) cursorOnScreen() bool {
-	if len(m.blocks) == 0 {
+	if len(m.lines) == 0 {
 		return true
 	}
-	srcLine := render.NavLineIndex(m.blocks, m.cursor)
-	// Compare in source-line space: both the cursor's source line
-	// and the viewport's source line (translating YOffset back via
-	// the wrapped-line map).
+	srcLine := m.cursor.LineIdx
 	wrapTop := m.viewport.YOffset()
 	wrapBot := wrapTop + m.viewport.Height()
 	srcTop := m.wrappedYOffsetToSource(wrapTop)
@@ -283,13 +281,13 @@ func (m *model) cursorOnScreen() bool {
 // with a 1-line cushion (not vim's scrolloff=5; pinky's viewport is
 // ~16 rows tall and a 5-line cushion would feel jumpy).
 func (m *model) scrollCursorIntoView() {
-	if len(m.blocks) == 0 {
+	if len(m.lines) == 0 {
 		return
 	}
 	if m.cursorOnScreen() {
 		return
 	}
-	srcLine := render.NavLineIndex(m.blocks, m.cursor)
+	srcLine := m.cursor.LineIdx
 	// Translate the target source line into wrapped-YOffset space
 	// so the viewport actually lands on that markdown line.
 	target := m.sourceYOffset(srcLine)
@@ -834,7 +832,7 @@ func (m *model) submitAllComments() {
 	if len(m.comments) == 0 {
 		return
 	}
-	if !m.dispatch(render.FormatCommentsAppendix(m.comments, m.blocks)) {
+	if !m.dispatch(render.FormatCommentsAppendix(m.comments)) {
 		return
 	}
 	m.comments = nil
@@ -906,43 +904,28 @@ func (m *model) saveComment() {
 	case render.CommentFile:
 		m.saveFileComment(a, text)
 	default:
-		m.saveBlockComment(a, text)
+		m.saveMessageComment(a, text)
 	}
 	m.commentTa.Blur()
 }
 
-// saveBlockComment is the existing block-kind path, factored out
-// of saveComment so saveComment can route by anchor kind.
-func (m *model) saveBlockComment(a commentAnchor, text string) {
-	idx := a.blockIdx
-	if idx < 0 || idx >= len(m.blocks) {
+// saveMessageComment is the message-kind path. The anchor is a
+// global byte range (byteA, byteC) over m.latest.Text; the verbatim
+// source slice is stored so the appendix can quote it.
+func (m *model) saveMessageComment(a commentAnchor, text string) {
+	ba, bc := a.byteA, a.byteC
+	if ba < 0 || bc < 0 || ba >= len(m.latest.Text) || bc > len(m.latest.Text) {
 		m.cancelCommentComposer()
 		return
 	}
-	src := ""
-	cs, ce := -1, -1
-	if a.charA >= 0 {
-		cs, ce = a.charA, a.charC
-		if cs > ce {
-			cs, ce = ce, cs
-		}
-		bsrc := m.blocks[idx].Source
-		if cs >= len(bsrc) {
-			cs = len(bsrc) - 1
-		}
-		if ce > len(bsrc) {
-			ce = len(bsrc)
-		}
-		if cs < 0 {
-			cs = 0
-		}
-		src = bsrc[cs:ce]
+	if ba > bc {
+		ba, bc = bc, ba
 	}
+	src := m.latest.Text[ba:bc]
 	c := render.Comment{
-		Kind:      render.CommentBlock,
-		BlockIdx:  idx,
-		CharStart: cs,
-		CharEnd:   ce,
+		Kind:      render.CommentMessage,
+		ByteA:     ba,
+		ByteC:     bc,
 		Source:    src,
 		Text:      text,
 		CreatedAt: time.Now(),
@@ -954,10 +937,9 @@ func (m *model) saveBlockComment(a commentAnchor, text string) {
 }
 
 // saveFileComment handles file-kind anchors: whole-file line-range
-// (charA < 0) or inline byte-range (charA >= 0) comments. The
-// charA/charC byte range is line-relative (anchored to
-// lineStart), not file-relative — file-level offsets would slice
-// across newlines.
+// (byteA/byteC zero) or inline byte-range (byteA > 0) comments. The
+// byteA/byteC byte range is line-relative (anchored to lineStart),
+// not file-relative — file-level offsets would slice across newlines.
 func (m *model) saveFileComment(a commentAnchor, text string) {
 	if a.filePath == "" {
 		m.cancelCommentComposer()
@@ -965,8 +947,8 @@ func (m *model) saveFileComment(a commentAnchor, text string) {
 	}
 	src := ""
 	cs, ce := -1, -1
-	if a.charA >= 0 {
-		cs, ce = a.charA, a.charC
+	if a.byteA >= 0 {
+		cs, ce = a.byteA, a.byteC
 		if cs > ce {
 			cs, ce = ce, cs
 		}
@@ -990,17 +972,13 @@ func (m *model) saveFileComment(a commentAnchor, text string) {
 		Path:      a.filePath,
 		LineStart: a.lineStart,
 		LineEnd:   a.lineEnd,
-		CharStart: cs,
-		CharEnd:   ce,
+		ByteA:     cs,
+		ByteC:     ce,
 		Source:    src,
 		Text:      text,
 		CreatedAt: time.Now(),
 	}
 	m.comments = append(m.comments, c)
-	// Re-render the file viewer so the new comment shows the
-	// yellow gutter. refreshFileViewer recomputes the lineIndex
-	// (HasComment flags); refreshFileView pushes the freshly
-	// rendered lines into the viewport cache.
 	m.refreshFileViewer()
 	m.refreshFileView()
 	m.state = m.fileReturnAfterComment()
@@ -1063,7 +1041,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc is a special key but is part of the nav surface (visual
 	// exit). Route it through the SM so single source of truth.
 	if isEsc(msg) {
-		action := render.NavHandle(0x1b, &m.nav, &m.cursor, &m.selection, m.blocks)
+		action := render.NavHandle(0x1b, &m.nav, &m.cursor, &m.selection, m.lines, m.lineStartOffsets)
 		if action == render.ActionExitVisual {
 			m.refreshViewport()
 		}
@@ -1072,7 +1050,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Single-rune keys go through the nav state machine. Special
 	// keys (arrows, PageUp/Down, Home/End) forward to the viewport.
 	if r, ok := singleRune(msg); ok {
-		action := render.NavHandle(r, &m.nav, &m.cursor, &m.selection, m.blocks)
+		action := render.NavHandle(r, &m.nav, &m.cursor, &m.selection, m.lines, m.lineStartOffsets)
 		switch action {
 		case render.ActionNone:
 			// unrecognised rune — forward to viewport (so keys like '/'
@@ -1086,7 +1064,7 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case render.ActionExitVisual:
 			m.refreshViewport()
 		case render.ActionComment:
-			m.enterCommentComposer(buildCommentAnchor(m.nav.Visual, &m.cursor, &m.selection, m.blocks))
+			m.enterCommentComposer(buildCommentAnchor(m.nav.Visual, &m.cursor, &m.selection, m.lines, m.lineStartOffsets))
 		case render.ActionSend:
 			m.handleSend()
 		case render.ActionRefresh:
@@ -1153,8 +1131,8 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			filePath:  entry.Path,
 			lineStart: 1,
 			lineEnd:   m.fileLineCount(entry.Path),
-			charA:     -1,
-			charC:     -1,
+			byteA:     -1,
+			byteC:     -1,
 		}
 		m.enterCommentComposer(m.commentAnchor)
 		return m, nil
@@ -1804,11 +1782,11 @@ func (m *model) openFileComment() {
 	a := commentAnchor{
 		kind:     render.CommentFile,
 		filePath: fv.path,
-		// Default to line-range (no inline bytes). Without these
-		// the zero value (0) would falsely register as an inline
-		// byte-0 selection, producing a `file-inline ""` comment.
-		charA: -1,
-		charC: -1,
+		// Default to line-range (no inline bytes). byteA/byteC
+		// stay at -1 to signal whole-line; valid byte offsets are
+		// >= 0 so the sentinel is unambiguous.
+		byteA: -1,
+		byteC: -1,
 	}
 	a.lineStart = fv.cursor
 	a.lineEnd = fv.cursor
@@ -1820,14 +1798,10 @@ func (m *model) openFileComment() {
 		} else {
 			a.lineStart, a.lineEnd = cLine, aLine
 		}
-		// Inline only when the visual spans exactly one line with a
-		// non-empty char range. Multi-line visual collapses to the
-		// line range above; single-line point visual falls back to
-		// the whole-line default seeded before this branch.
 		if a.lineStart == a.lineEnd && aChar != cChar {
-			a.charA, a.charC = aChar, cChar
-			if a.charA > a.charC {
-				a.charA, a.charC = a.charC, a.charA
+			a.byteA, a.byteC = aChar, cChar
+			if a.byteA > a.byteC {
+				a.byteA, a.byteC = a.byteC, a.byteA
 			}
 		}
 	}
@@ -1835,29 +1809,24 @@ func (m *model) openFileComment() {
 	m.enterCommentComposer(a)
 }
 
-// buildCommentAnchor assembles the (block, charA, charC) for the next
-// comment. With an active selection, anchor is the selection range;
-// otherwise anchor covers the whole block at the cursor. The
-// no-visual branch uses charA=charC=-1 to signal whole-block (not
-// inline byte-0) so the appendix emits marker=`block`, not
-// marker=`inline`.
-func buildCommentAnchor(visual render.NavMode, cur *render.NavCursor, sel *render.NavSelection, blocks []render.Block) commentAnchor {
-	if visual == render.NavLine {
-		idx := sel.BlockIdx
-		if idx < 0 || idx >= len(blocks) {
-			idx = cur.BlockIdx
-		}
-		a, c := sel.CharA, sel.CharC
+// buildCommentAnchor assembles (byteA, byteC) for the next comment.
+// With an active selection, anchor is the selection range; otherwise
+// anchor covers the whole current source line (every byte from the
+// line's start to its end, inclusive of the trailing newline).
+func buildCommentAnchor(visual render.NavMode, cur *render.NavCursor, sel *render.NavSelection, lines []string, lineStartOffsets []int) commentAnchor {
+	if visual == render.NavLine && sel.ByteA != sel.ByteC {
+		a, c := sel.ByteA, sel.ByteC
 		if a > c {
 			a, c = c, a
 		}
-		return commentAnchor{blockIdx: idx, charA: a, charC: c}
+		return commentAnchor{kind: render.CommentMessage, byteA: a, byteC: c}
 	}
-	idx := cur.BlockIdx
-	if idx < 0 || idx >= len(blocks) {
-		return commentAnchor{blockIdx: -1, charA: -1, charC: -1}
+	if cur.LineIdx < 0 || cur.LineIdx >= len(lines) {
+		return commentAnchor{kind: render.CommentMessage, byteA: -1, byteC: -1}
 	}
-	return commentAnchor{blockIdx: idx, charA: -1, charC: -1}
+	a := lineStartOffsets[cur.LineIdx]
+	c := a + len(lines[cur.LineIdx]) + 1 // +1 for the trailing "\n"
+	return commentAnchor{kind: render.CommentMessage, byteA: a, byteC: c}
 }
 
 // handleSend is the universal `s` dispatch. In nav it batch-sends
@@ -1877,7 +1846,7 @@ func (m *model) handleSend() {
 			return
 		}
 		if m.includeComments && len(m.comments) > 0 {
-			text += "\n\n---\n" + render.FormatCommentsAppendix(m.comments, m.blocks)
+			text += "\n\n---\n" + render.FormatCommentsAppendix(m.comments)
 		}
 		if !m.dispatch(text) {
 			return
@@ -2141,20 +2110,11 @@ var headerAbbrevLevels = []int{2, 1}
 
 func (m *model) refreshViewport() {
 	if m.latest.Text == "" {
-		m.blocks = nil
+		m.lines = nil
+		m.lineStartOffsets = nil
 		m.wrappedToSrc = nil
 		m.sourceToFirst = nil
 		m.viewport.SetContent(placeholderStyle.Render(placeholderText))
-		return
-	}
-	// RenderMessageWithComments is a strict superset of renderBlocks;
-	// for zero comments it returns the same output.
-	rendered, blocks := render.RenderMessageWithComments(m.latest.Text, m.comments)
-	if rendered == "" {
-		// Renderer rejected this width (very narrow terminal): plain-text fallback.
-		m.wrappedToSrc = nil
-		m.sourceToFirst = nil
-		m.viewport.SetContent(m.latest.Text)
 		return
 	}
 	// ponytail: word-wrap to fit the viewport before the gutter is
@@ -2165,19 +2125,35 @@ func (m *model) refreshViewport() {
 	if w := m.viewport.Width(); w > 1 {
 		wrapWidth = w - 1
 	}
-	m.blocks = blocks
-	focused := m.cursor.BlockIdx
-	if focused < 0 || focused >= len(m.blocks) {
-		focused = render.CurrentBlockIdx(blocks, m.wrappedYOffsetToSource(m.viewport.YOffset()))
+	m.lines = strings.Split(m.latest.Text, "\n")
+	m.lineStartOffsets = make([]int, len(m.lines))
+	{
+		offset := 0
+		for i, ln := range m.lines {
+			m.lineStartOffsets[i] = offset
+			offset += len(ln) + 1
+		}
 	}
-	guttered, w2s := render.InjectGutterWrapped(rendered, m.blocks, focused, wrapWidth)
+	guttered, w2s := render.LineGutter(m.latest.Text, m.comments, wrapWidth)
 	m.wrappedToSrc = w2s
-	// Build the inverse: first wrapped line of each source line.
-	m.sourceToFirst = make([]int, len(strings.Split(rendered, "\n")))
+	m.sourceToFirst = make([]int, len(m.lines))
 	for i := 1; i < len(w2s); i++ {
 		if w2s[i] != w2s[i-1] && m.sourceToFirst[w2s[i]] == 0 {
 			m.sourceToFirst[w2s[i]] = i
 		}
+	}
+	// Apply the inline-block cursor at (lineIdx, charPos). The
+	// gutter logic above ran without knowing where the cursor is;
+	// the cursor paint is layered on top.
+	if m.cursor.LineIdx >= 0 && m.cursor.LineIdx < len(m.lines) {
+		guttered = render.ApplyInlineCursor(
+			guttered,
+			m.lines,
+			m.cursor.LineIdx,
+			m.cursor.CharPos,
+			m.sourceToFirst,
+			wrapWidth,
+		)
 	}
 	m.viewport.SetContent(guttered)
 }
@@ -2515,14 +2491,14 @@ func (m model) renderFileContent() string {
 		ln := i + 1
 		var gutter string
 		if i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment {
-			gutter = yellow + "▍" + resetANSI
+			gutter = yellow + "▍" + "\x1b[0m"
 		} else {
 			gutter = " "
 		}
 		selected := applySelection(content, ln, m.fileViewer.visual, m.fileViewer.cursor, m.fileViewer.charPos)
 		var rendered string
 		if ln == m.fileViewer.cursor {
-			rendered = applyCursor(selected, content, m.fileViewer.charPos)
+			rendered = render.ApplyCursor(selected, content, m.fileViewer.charPos)
 		} else {
 			rendered = selected
 		}
@@ -2531,90 +2507,14 @@ func (m model) renderFileContent() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// applyCursor wraps the rune at charPos with an inverted-background
-// ANSI escape so the cursor byte is visually distinct. When
-// charPos == len(line) (the cursor sits at the line end), a
-// trailing inverted space is rendered so the cursor still appears
-// at the end of the line. selected is the line content already
-// carrying the cyan selection ANSI; the cursor's escapes are
-// layered over it so the cursor byte wins on overlap.
-func applyCursor(selected, line string, charPos int) string {
-	if charPos < 0 {
-		charPos = 0
-	}
-	if charPos >= len(line) {
-		// Trailing space at the line end.
-		return selected + "\x1b[7m \x1b[27m"
-	}
-	_, sz := utf8.DecodeRuneInString(line[charPos:])
-	end := charPos + sz
-	// Find the rune start in `selected` that corresponds to
-	// `charPos`. Since selected is derived from line via
-	// applySelection (which splices ANSI codes around whole bytes
-	// without re-ordering), the byte offset maps 1:1 onto the
-	// string positions outside the ANSI escapes; we need to walk
-	// past ANSI sequences to find the position.
-	return spliceInvert(selected, charPos, end)
-}
-
-// spliceInvert inserts \x1b[7m ... \x1b[27m around the rune
-// spanning [start, end) in line. ANSI escapes inside `selected`
-// are preserved and not split.
-func spliceInvert(selected string, start, end int) string {
-	var b strings.Builder
-	pos := 0
-	for i := 0; i < len(selected); {
-		if selected[i] == 0x1b {
-			// ponytail: copy the ANSI sequence verbatim. We
-			// support CSI (\x1b[...m) and single-char ESC
-			// sequences (\x1b m, \x1b 7, etc.); the CSI
-			// terminator is a byte in [0x40, 0x7e] AFTER the
-			// leading `[`, so we skip the `[` first.
-			j := i + 1
-			if j < len(selected) && selected[j] == '[' {
-				j++
-				for j < len(selected) {
-					c := selected[j]
-					j++
-					if c >= 0x40 && c <= 0x7e {
-						break
-					}
-				}
-			} else if j < len(selected) {
-				j++
-			}
-			b.WriteString(selected[i:j])
-			i = j
-			continue
-		}
-		if pos == start {
-			b.WriteString(cursorInvertOn)
-		}
-		// write one rune (or one byte for invalid UTF-8)
-		_, sz := utf8.DecodeRuneInString(selected[i:])
-		if sz <= 0 {
-			sz = 1
-		}
-		b.WriteString(selected[i : i+sz])
-		if pos == end-1 {
-			b.WriteString(cursorInvertOff)
-		}
-		pos++
-		i += sz
-	}
-	if start >= len(selected) {
-		// start is past the visible content; render trailing block
-		b.WriteString(cursorInvertOn)
-		b.WriteByte(' ')
-		b.WriteString(cursorInvertOff)
-	}
-	return b.String()
-}
+// applyCursor / spliceInvert were lifted to the render package
+// (render.ApplyCursor, render.SpliceInvert). The file viewer's
+// call site uses render.ApplyCursor above. The cursorInvertOn /
+// cursorInvertOff constants remain here for the file viewer's
+// trailing-space cursor (kept inlined at the call site).
 
 const (
-	selectionANSI  = "\x1b[7m"
-	resetANSI      = "\x1b[0m"
-	cursorInvertOn = "\x1b[7m"
+	cursorInvertOn  = "\x1b[7m"
 	cursorInvertOff = "\x1b[27m"
 )
 
@@ -2778,7 +2678,7 @@ func applySelection(line string, lineNo int, sel fileSelection, cursorLine, curs
 	if a >= c {
 		return line
 	}
-	return line[:a] + selectionANSI + line[a:c] + resetANSI + line[c:]
+	return line[:a] + "\x1b[7m" + line[a:c] + "\x1b[0m" + line[c:]
 }
 
 func (m model) pickerView() string {

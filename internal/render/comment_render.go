@@ -1,15 +1,11 @@
 package render
 
-import (
-	"cmp"
-	"slices"
-	"strings"
-)
+import "strings"
 
 // wordWrap breaks s into lines no wider than width, splitting on
-// whitespace. Input is plain text (rendered markdown, no ANSI),
-// so a stdlib word-wrap suffices. words longer than width are
-// placed on their own line unbroken. Newlines in s are preserved.
+// whitespace. Newlines in s are preserved. words longer than width
+// are placed on their own line unbroken. Used by LineGutter to emit
+// per-source-line wrapped sub-lines.
 func wordWrap(s string, width int) string {
 	if width <= 0 {
 		return s
@@ -20,7 +16,7 @@ func wordWrap(s string, width int) string {
 			b.WriteByte('\n')
 		}
 		col := 0
-		for j, word := range strings.Fields(line) {
+		for _, word := range strings.Fields(line) {
 			w := len(word)
 			switch {
 			case col == 0:
@@ -35,164 +31,66 @@ func wordWrap(s string, width int) string {
 				b.WriteString(word)
 				col = w
 			}
-			_ = j
 		}
 	}
 	return b.String()
 }
 
-// footnote is one comment's footnote line, ready to be injected
-// after the block it annotates.
-type footnote struct {
-	lineIdx int    // rendered line index where the footnote should be inserted
-	marker  string // "▸" (block) or "•" (inline)
-	body    string // footnote text, including the optional excerpt prefix
-	inline  bool
-	excerpt string
-}
-
-
-
-// RenderMessageWithComments renders md and overlays comment annotations
-// on top of the result: a footnote line below each commented block
-// and the HasComment flag set on every block that has at least one
-// comment (used by the model layer to draw the yellow left-gutter
-// indicator).
-func RenderMessageWithComments(md string, comments []Comment) (string, []Block) {
-	rendered, blocks := renderBlocks(md)
-	if len(comments) == 0 {
-		return rendered, blocks
-	}
-	for _, c := range comments {
-		if c.BlockIdx >= 0 && c.BlockIdx < len(blocks) {
-			blocks[c.BlockIdx].HasComment = true
-		}
-	}
-	return injectFootnotes(rendered, footnoteLines(blocks, comments)), blocks
-}
-
-// footnoteLines returns one footnote per comment, sorted by (blockIdx,
-// order-of-creation). The lineIdx is the EndLine of the block + 1
-// (i.e. immediately after the block's last line).
-func footnoteLines(blocks []Block, comments []Comment) []footnote {
-	if len(comments) == 0 {
-		return nil
-	}
-	out := make([]footnote, 0, len(comments))
-	for _, c := range comments {
-		if c.BlockIdx < 0 || c.BlockIdx >= len(blocks) {
-			continue
-		}
-		insertAt := blocks[c.BlockIdx].EndLine + 1
-		// Multiple comments on the same block → stack after the previous
-		// footnote line.
-		for _, prev := range out {
-			if prev.lineIdx == insertAt {
-				insertAt++
-			}
-		}
-		marker := footnoteMarker(c)
-		inline := c.CharStart >= 0
-		out = append(out, footnote{
-			lineIdx: insertAt,
-			marker:  marker,
-			body:    c.Text,
-			inline:  inline,
-			excerpt: truncate(c.Source, excerptLimit),
-		})
-	}
-	return out
-}
-
-// InjectGutterWrapped is word-wrap-aware: each rendered source
-// line is word-wrapped independently to wrapWidth, then a gutter
-// is prepended per WRAPPED line. The gutter color is derived from
-// the block that contains the source line, so all wrapped lines
-// of the same markdown source line carry the same gutter. The
-// returned int slice maps wrapped-line index → source-line index
-// so callers (the viewport owner) can translate wrapped scroll
-// positions back into source-line coordinates when matching
-// against blocks. wrapWidth <= 0 falls back to a single wrapped
-// line per source line (no actual wrap).
-func InjectGutterWrapped(rendered string, blocks []Block, focused int, wrapWidth int) (string, []int) {
-	const cyan = "\x1b[38;5;51m"
+// LineGutter walks the message text line by line, word-wraps each
+// line independently to wrapWidth, and prepends a gutter character
+// to each wrapped sub-line. The gutter is yellow `▍` (228) on every
+// sub-line whose source line overlaps at least one saved comment's
+// byte range, or a space otherwise. The returned []int maps each
+// wrapped sub-line back to its source-line index so the caller can
+// translate viewport YOffset back to (lineIdx, charPos).
+//
+// Comments are matched by global byte range: a source line is
+// "touched" if its [byteStart, byteEnd) range intersects any
+// comment's [ByteA, ByteC). wrapWidth <= 0 falls back to a single
+// wrapped line per source line (no actual wrap).
+func LineGutter(text string, comments []Comment, wrapWidth int) (string, []int) {
 	const yellow = "\x1b[38;5;228m"
 	const reset = "\x1b[0m"
-	sourceLines := strings.Split(rendered, "\n")
+	lines := strings.Split(text, "\n")
+	lineStart := make([]int, len(lines))
+	offset := 0
+	for i, ln := range lines {
+		lineStart[i] = offset
+		offset += len(ln) + 1 // +1 for the "\n"
+	}
+	// Pre-index overlapping comments per source line for O(N+M) instead
+	// of O(N*M).
+	touched := make([]bool, len(lines))
+	for _, c := range comments {
+		for i := range lines {
+			if c.ByteA < lineStart[i]+len(lines[i]) && c.ByteC > lineStart[i] {
+				touched[i] = true
+			}
+		}
+	}
+
 	var b strings.Builder
-	srcIdx := make([]int, 0, len(sourceLines))
-	for i, sl := range sourceLines {
+	wrappedSrc := make([]int, 0, len(lines))
+	for i, ln := range lines {
 		var wrapped string
 		if wrapWidth > 0 {
-			wrapped = wordWrap(sl, wrapWidth)
+			wrapped = wordWrap(ln, wrapWidth)
 		} else {
-			wrapped = sl
+			wrapped = ln
 		}
 		wLines := strings.Split(wrapped, "\n")
 		for _, wl := range wLines {
-			idx := CurrentBlockIdx(blocks, i)
-			switch {
-			case focused >= 0 && idx == focused:
-				b.WriteString(cyan)
-				b.WriteRune('▍')
-				b.WriteString(reset)
-			case idx >= 0 && blocks[idx].HasComment:
+			if touched[i] {
 				b.WriteString(yellow)
 				b.WriteRune('▍')
 				b.WriteString(reset)
-			default:
+			} else {
 				b.WriteByte(' ')
 			}
 			b.WriteString(wl)
 			b.WriteByte('\n')
-			srcIdx = append(srcIdx, i)
+			wrappedSrc = append(wrappedSrc, i)
 		}
 	}
-	return strings.TrimRight(b.String(), "\n"), srcIdx
-}
-
-// injectFootnotes inserts each footnote line immediately after its
-// block's rendered range. Multiple footnotes at the same insertion
-// point stack in declaration order.
-func injectFootnotes(rendered string, footnotes []footnote) string {
-	if len(footnotes) == 0 {
-		return rendered
-	}
-	lines := strings.Split(rendered, "\n")
-	slices.SortFunc(footnotes, func(a, b footnote) int {
-		return cmp.Compare(a.lineIdx, b.lineIdx)
-	})
-	inserts := make(map[int][]string, len(footnotes))
-	maxIdx := len(lines) - 1
-	for _, f := range footnotes {
-		body := "  " + f.marker + " " + f.body
-		if f.inline {
-			body = "  " + f.marker + " “" + f.excerpt + "” — " + f.body
-		}
-		if f.lineIdx > maxIdx {
-			f.lineIdx = maxIdx + 1
-		}
-		for inserts[f.lineIdx] != nil {
-			f.lineIdx++
-		}
-		inserts[f.lineIdx] = append(inserts[f.lineIdx], body)
-	}
-	var b strings.Builder
-	for i, line := range lines {
-		b.WriteString(line)
-		b.WriteByte('\n')
-		if extras, ok := inserts[i]; ok {
-			for _, e := range extras {
-				b.WriteString(e)
-				b.WriteByte('\n')
-			}
-		}
-	}
-	if extras, ok := inserts[maxIdx+1]; ok {
-		for _, e := range extras {
-			b.WriteString(e)
-			b.WriteByte('\n')
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), wrappedSrc
 }

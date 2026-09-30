@@ -222,8 +222,8 @@ func TestCommitFirstLineVisible_AfterScroll(t *testing.T) {
 	}
 	view := mv.viewport.View()
 	firstRendered := strings.SplitN(view, "\n", 2)[0]
-	if !strings.Contains(firstRendered, "Brand new message") {
-		t.Errorf("after second commit: first visible line should contain 'Brand new message'; got %q",
+	if !strings.Contains(firstRendered, "rand new message") {
+		t.Errorf("after second commit: first visible line should contain 'rand new message' (cursor paint over 'B' expected); got %q",
 			firstRendered)
 	}
 }
