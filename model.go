@@ -106,9 +106,7 @@ type lspPickerState struct {
 type lspManager interface {
 	DidOpen(ctx context.Context, path, content string)
 	DidClose(ctx context.Context, path string)
-	FindDefinition(ctx context.Context, id int64, path string, line, char int)
-	FindReferences(ctx context.Context, id int64, path string, line, char int)
-	Hover(ctx context.Context, id int64, path string, line, char int)
+	Dispatch(ctx context.Context, id int64, kind pinkylsp.Kind, path string, line, char int)
 	ServerStatus(path string) pinkylsp.ServerStatus
 	Shutdown(ctx context.Context)
 }

@@ -18,44 +18,29 @@ type Bridge struct {
 // one Bridge; both LocationsMsg / HoverMsg calls go through it.
 func NewBridge(mgr *Manager) *Bridge { return &Bridge{mgr: mgr} }
 
-// RequestDefinition / RequestReferences / RequestHover each issue
-// the call and return a tea.Cmd that delivers LocationsMsg (or
-// HoverMsg) once the manager's goroutine has written the reply.
-//
-// ponytail: a request id is stamped at the tea.Cmd build site
-// (synchronous), so the drain loop can match without a separate
-// in-flight registry. Superseded requests fall out of the
-// comparison naturally — no channel-close plumbing needed.
+// RequestDefinition / RequestReferences / RequestHover each
+// allocate one id (synchronous, so the wait loop can match
+// without an in-flight registry), launch the manager's Dispatch
+// on a goroutine, and return a tea.Cmd that resolves when the
+// matching reply lands on the result channel. Superseded replies
+// (id != the one we stamped) are dropped in the wait loop.
 
 func (b *Bridge) RequestDefinition(ctx context.Context, path string, line, char int) tea.Cmd {
-	return b.run(ctx, b.mgr.FindDefinition, KindDefinition, path, line, char, b.waitForLocations)
+	id := b.mgr.nextRequestID()
+	go b.mgr.Dispatch(ctx, id, KindDefinition, path, line, char)
+	return b.waitForLocations(KindDefinition, id)
 }
 
 func (b *Bridge) RequestReferences(ctx context.Context, path string, line, char int) tea.Cmd {
-	return b.run(ctx, b.mgr.FindReferences, KindReferences, path, line, char, b.waitForLocations)
+	id := b.mgr.nextRequestID()
+	go b.mgr.Dispatch(ctx, id, KindReferences, path, line, char)
+	return b.waitForLocations(KindReferences, id)
 }
 
 func (b *Bridge) RequestHover(ctx context.Context, path string, line, char int) tea.Cmd {
-	return b.run(ctx, b.mgr.Hover, KindHover, path, line, char, b.waitForHover)
-}
-
-// run allocates the request id once (synchronously), stamps it
-// onto the Manager-side Request via issue, and returns the wait
-// helper bound to the same id. The wait helper and the
-// Manager's deliver both key off this single id so the reply
-// round-trip closes. ponytail: one counter tick per request,
-// not two — keeping the bridge and the manager on the same id
-// is what makes the channel-based hand-off actually work.
-func (b *Bridge) run(
-	ctx context.Context,
-	issue func(ctx context.Context, id int64, path string, line, char int),
-	kind Kind,
-	path string, line, char int,
-	wait func(kind Kind, id int64) tea.Cmd,
-) tea.Cmd {
 	id := b.mgr.nextRequestID()
-	issue(ctx, id, path, line, char)
-	return wait(kind, id)
+	go b.mgr.Dispatch(ctx, id, KindHover, path, line, char)
+	return b.waitForHover(KindHover, id)
 }
 
 // waitForLocations returns a Cmd that reads one Result from the

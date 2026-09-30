@@ -18,9 +18,9 @@ import (
 // surface the model layer touches. It records every method call
 // so the test can assert didOpen / didClose fire in the right
 // order. ponytail: the model only depends on the Manager type's
-// methods (DidOpen / DidClose / FindDefinition / FindReferences
-// / Hover / Shutdown). Swapping in a fake keeps the model layer
-// testable without spinning up gopls.
+// methods (DidOpen / DidClose / Dispatch / ServerStatus / Shutdown).
+// Swapping in a fake keeps the model layer testable without
+// spinning up gopls.
 type fakeLSPManager struct {
 	calls  []string
 	status pinkylsp.ServerStatus
@@ -30,18 +30,12 @@ func (f *fakeLSPManager) record(method string) {
 	f.calls = append(f.calls, method)
 }
 
-func (f *fakeLSPManager) DidOpen(_ context.Context, _, _ string)  { f.record("DidOpen") }
-func (f *fakeLSPManager) DidClose(_ context.Context, _ string)   { f.record("DidClose") }
-func (f *fakeLSPManager) FindDefinition(_ context.Context, _ int64, _ string, _, _ int) {
-	f.record("FindDefinition")
+func (f *fakeLSPManager) DidOpen(_ context.Context, _, _ string) { f.record("DidOpen") }
+func (f *fakeLSPManager) DidClose(_ context.Context, _ string)  { f.record("DidClose") }
+func (f *fakeLSPManager) Dispatch(_ context.Context, _ int64, _ pinkylsp.Kind, _ string, _, _ int) {
+	f.record("Dispatch")
 }
-func (f *fakeLSPManager) FindReferences(_ context.Context, _ int64, _ string, _, _ int) {
-	f.record("FindReferences")
-}
-func (f *fakeLSPManager) Hover(_ context.Context, _ int64, _ string, _, _ int) {
-	f.record("Hover")
-}
-func (f *fakeLSPManager) ServerStatus(path string) pinkylsp.ServerStatus {
+func (f *fakeLSPManager) ServerStatus(string) pinkylsp.ServerStatus {
 	f.record("ServerStatus")
 	return f.status
 }

@@ -377,119 +377,42 @@ func (m *Manager) DidClose(ctx context.Context, path string) {
 	_ = entry.client.NotifyDidCloseTextDocument(ctx, uriForPath(path))
 }
 
-// FindDefinition runs textDocument/definition at (line, char) in
-// path and delivers the reply asynchronously on m.requests. The
-// caller (the bridge) supplies id so the bridge's wait loop and
-// the manager's deliver key off the same id — round-trip closes.
-func (m *Manager) FindDefinition(ctx context.Context, id int64, path string, line, char int) {
-	req := Request{
-		ID:   id,
-		Kind: KindDefinition,
-		URI:  uriForPath(path),
-		Line: line,
-		Char: char,
-	}
-	go m.runFindDefinition(ctx, req, path)
-}
-
-// FindReferences runs textDocument/references at (line, char) in
-// path and delivers the reply asynchronously on m.requests. The
-// caller (the bridge) supplies id so the bridge's wait loop and
-// the manager's deliver key off the same id — round-trip closes.
-func (m *Manager) FindReferences(ctx context.Context, id int64, path string, line, char int) {
-	req := Request{
-		ID:   id,
-		Kind: KindReferences,
-		URI:  uriForPath(path),
-		Line: line,
-		Char: char,
-	}
-	go m.runFindReferences(ctx, req, path)
-}
-
-// Hover runs textDocument/hover at (line, char) in path and
-// delivers the reply asynchronously on m.requests. The caller
-// (the bridge) supplies id so the bridge's wait loop and the
-// manager's deliver key off the same id — round-trip closes.
-func (m *Manager) Hover(ctx context.Context, id int64, path string, line, char int) {
-	req := Request{
-		ID:   id,
-		Kind: KindHover,
-		URI:  uriForPath(path),
-		Line: line,
-		Char: char,
-	}
-	go m.runHover(ctx, req, path)
-}
-
-// runFindDefinition / runFindReferences / runHover are the
-// goroutine bodies that issue the powernap call and translate
-// errors into the manager's ErrServerMissing shape when
-// appropriate.
-
-// run executes the per-query pipeline shared by FindDefinition,
-// FindReferences, and Hover: ensure server, run the supplied
-// call against the client, translate the reply into a Result,
-// and deliver it. call gets the ready-to-use client and the
-// 0-based position; it returns the reply (Locations / Hover)
-// or an error.
-func (m *Manager) run(
-	ctx context.Context,
-	req Request, path string,
-	call func(ctx context.Context, client *powernap.Client, pos protocol.Position) error,
-	fill func(res *Result),
-) {
-	res := Result{ID: req.ID, Kind: req.Kind}
+// Dispatch issues the LSP query for kind at (line, char) in path
+// and delivers the reply on m.requests. Called by the bridge on a
+// goroutine — caller doesn't wait. The id is allocated by the
+// bridge (m.nextRequestID) and stamped onto the Result so the
+// wait loop can drop superseded replies.
+//
+// Powernap's three query APIs take different argument shapes
+// (RequestDefinition/FindReferences want a path + ints;
+// RequestHover wants a URI + protocol.Position), so the switch
+// arms the call accordingly instead of going through a single
+// callback.
+func (m *Manager) Dispatch(ctx context.Context, id int64, kind Kind, path string, line, char int) {
+	res := Result{ID: id, Kind: kind}
 	entry, _, err := m.ensureServer(ctx, path)
 	if err != nil {
 		assignErr(&res, err)
 		m.deliver(res)
 		return
 	}
-	pos := protocol.Position{Line: uint32(req.Line - 1), Character: uint32(req.Char)} //nolint:gosec
-	if callErr := call(ctx, entry.client, pos); callErr != nil {
-		res.Err = callErr
-		m.deliver(res)
-		return
+	c := entry.client
+	switch kind {
+	case KindDefinition:
+		_, err := c.RequestDefinition(ctx, path, line-1, char)
+		res.Err = err
+	case KindReferences:
+		_, err := c.FindReferences(ctx, path, line-1, char, true)
+		res.Err = err
+	case KindHover:
+		pos := protocol.Position{Line: uint32(line - 1), Character: uint32(char)} //nolint:gosec
+		if h, err := c.RequestHover(ctx, uriForPath(path), pos); err == nil && h != nil {
+			res.Hover = h
+		} else {
+			res.Err = err
+		}
 	}
-	fill(&res)
 	m.deliver(res)
-}
-
-func (m *Manager) runFindDefinition(ctx context.Context, req Request, path string) {
-	m.run(ctx, req, path,
-		func(ctx context.Context, c *powernap.Client, pos protocol.Position) error {
-			_, err := c.RequestDefinition(ctx, path, req.Line-1, req.Char)
-			return err
-		},
-		func(res *Result) {},
-	)
-}
-
-func (m *Manager) runFindReferences(ctx context.Context, req Request, path string) {
-	m.run(ctx, req, path,
-		func(ctx context.Context, c *powernap.Client, _ protocol.Position) error {
-			_, err := c.FindReferences(ctx, path, req.Line-1, req.Char, true)
-			return err
-		},
-		func(res *Result) {},
-	)
-}
-
-func (m *Manager) runHover(ctx context.Context, req Request, path string) {
-	var hover *protocol.Hover // captured so fill can write it onto the Result
-	m.run(ctx, req, path,
-		func(ctx context.Context, c *powernap.Client, pos protocol.Position) error {
-			h, err := c.RequestHover(ctx, req.URI, pos)
-			hover = h
-			return err
-		},
-		func(res *Result) {
-			if hover != nil {
-				res.Hover = hover
-			}
-		},
-	)
 }
 
 // assignErr copies an *ErrServerMissing onto res so the model layer

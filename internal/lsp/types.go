@@ -44,17 +44,6 @@ type Location = protocol.Location
 // one-line hover footer.
 type Hover = protocol.Hover
 
-// Request is one in-flight LSP query. ID disambiguates replies
-// when the user presses a key while a previous query is still
-// outstanding.
-type Request struct {
-	ID    int64
-	Kind  Kind
-	URI   string
-	Line  int // 1-based line, matches powernap's expectations after offset conversion
-	Char  int // 0-based byte offset into the line
-}
-
 // ServerState is the lifecycle state of one language server as
 // observed by the model layer's status-line render. Sourced from
 // the Manager's internal clientEntry.state plus the 30s
