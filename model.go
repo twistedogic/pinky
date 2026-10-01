@@ -265,11 +265,6 @@ type model struct {
 	// references). Populated by the LocationsMsg handler.
 	lspPicker lspPickerState
 
-	// hoverFooter is the one-line hover content rendered between
-	// the file body and the help line. Cleared on any non-hover
-	// key press (see handleFileViewKey).
-	hoverFooter string
-
 	// hoverModal is the pop-up that replaced hoverFooter as the
 	// primary hover surface. Visible flips on when a HoverMsg
 	// resolves; the viewport is sized to fit the content (capped)
@@ -470,12 +465,7 @@ func todoStoragePath(cwd string) string {
 // todoHomeDir is the root under which per-workspace todo files
 // live. Default is ~/.local/share/pinky; tests override via
 // todoHomeDirOverride.
-var todoHomeDirOverride string
-
 func todoHomeDir() string {
-	if todoHomeDirOverride != "" {
-		return todoHomeDirOverride
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return filepath.Join(os.TempDir(), "pinky")
@@ -602,7 +592,7 @@ func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd
 	if msg.Err != nil {
 		return m, nil
 	}
-	label := kindLabel(msg.Kind)
+	label := kindLabels[msg.Kind]
 	switch len(msg.Locations) {
 	case 0:
 		return m, nil
@@ -636,17 +626,9 @@ func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd
 	}
 }
 
-// kindLabel maps an LSP Kind to the human-readable label the
-// picker header renders ("definition" / "references").
-func kindLabel(k pinkylsp.Kind) string {
-	switch k {
-	case pinkylsp.KindDefinition:
-		return "definition"
-	case pinkylsp.KindReferences:
-		return "references"
-	}
-	return ""
-}
+// kindLabel maps an LSP Kind to the picker header label. Indexed
+// by Kind (KindDefinition=0, KindReferences=1, KindHover=2).
+var kindLabels = [...]string{"definition", "references", ""}
 
 // handleHoverMsg opens the hover modal with the resolved content.
 // Empty / errored / server-missing replies stay silent (missing-
@@ -1630,12 +1612,12 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if isKeyRune(msg, 'j') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.fileViewMoveLine(+1)
 		return m, nil
 	}
 	if isKeyRune(msg, 'k') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.fileViewMoveLine(-1)
 		return m, nil
 	}
@@ -1644,12 +1626,12 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// updates visual.CharC when visual is active so the cyan
 	// highlight tracks the cursor exactly as today.
 	if isKeyRune(msg, 'l') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.fileViewMoveRune(+1)
 		return m, nil
 	}
 	if isKeyRune(msg, 'h') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.fileViewMoveRune(-1)
 		return m, nil
 	}
@@ -1657,18 +1639,18 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// PrevWordStart as stateNav; cursor is the visual moving end,
 	// so the selection tracks automatically.
 	if isKeyRune(msg, 'w') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.fileViewMoveWord(+1)
 		return m, nil
 	}
 	if isKeyRune(msg, 'b') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.fileViewMoveWord(-1)
 		return m, nil
 	}
 
 	if isKeyRune(msg, 'c') {
-		m.clearHoverFooter()
+		m.missingServerHint = ""
 		m.openFileComment()
 		return m, nil
 	}
@@ -2052,16 +2034,7 @@ func (m *model) exitFileViewer() {
 	m.reflow()
 }
 
-// clearHoverFooter drops the missing-server-hint footer. The
-// name is a holdover from when this also cleared the (now-removed)
-// hover footer; the field is gone and the pop-up modal is
-// dismissed by handleFileViewKey's modal-routing block, so this
-// only needs to touch missingServerHint.
-func (m *model) clearHoverFooter() {
-	if m.missingServerHint != "" {
-		m.missingServerHint = ""
-	}
-}
+// jumpToLocation moves the cursor to loc. Same-file locations
 
 // jumpToLocation moves the cursor to loc. Same-file locations
 // only mutate cursor + charPos + scroll. Cross-file locations
@@ -2074,7 +2047,7 @@ func (m *model) clearHoverFooter() {
 // ponytail: relative path resolution reuses filepath.Rel so the
 // caller doesn't need to know the manager's rootURI.
 func (m *model) jumpToLocation(loc pinkylsp.Location) {
-	uriPath, err := pinkylsp.URIToPath(string(loc.URI))
+	uriPath, err := loc.URI.Path()
 	if err != nil || uriPath == "" {
 		return
 	}
@@ -2244,8 +2217,8 @@ func (m *model) reflow() {
 	}
 	if m.state == stateFileView {
 		vpHeight-- // ponytail: header line above the file viewport.
-		if m.hoverFooter != "" || m.missingServerHint != "" {
-			vpHeight-- // ponytail: one-line hover / install-hint footer.
+		if m.missingServerHint != "" {
+			vpHeight-- // ponytail: install-hint footer.
 		}
 	}
 	// Top header: 1 or 2 rows depending on width / cwd length.
@@ -3069,7 +3042,7 @@ func (m model) lspPickerView() string {
 		return b.String()
 	}
 	for i, loc := range m.lspPicker.locations {
-		uriPath, err := pinkylsp.URIToPath(string(loc.URI))
+		uriPath, err := loc.URI.Path()
 		if err != nil {
 			uriPath = string(loc.URI)
 		}

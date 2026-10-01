@@ -14,14 +14,6 @@ import (
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
 )
 
-// URIToPath converts a file:// URI to an absolute filesystem path.
-// Wrapper around protocol.DocumentURI.Path() exposed at the pinky
-// layer so callers don't need to import the powernap protocol
-// package directly.
-func URIToPath(uri string) (string, error) {
-	return protocol.DocumentURI(uri).Path()
-}
-
 // Kind discriminates the three LSP queries pinky wires into the
 // file viewer. The bridge dispatches on Kind to choose the right
 // powernap call and the right result type for the reply channel.

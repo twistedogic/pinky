@@ -2,40 +2,6 @@ package render
 
 import "strings"
 
-// wordWrap breaks s into lines no wider than width, splitting on
-// whitespace. Newlines in s are preserved. words longer than width
-// are placed on their own line unbroken. Used by LineGutter to emit
-// per-source-line wrapped sub-lines.
-func wordWrap(s string, width int) string {
-	if width <= 0 {
-		return s
-	}
-	var b strings.Builder
-	for i, line := range strings.Split(s, "\n") {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		col := 0
-		for _, word := range strings.Fields(line) {
-			w := len(word)
-			switch {
-			case col == 0:
-				b.WriteString(word)
-				col = w
-			case col+1+w <= width:
-				b.WriteByte(' ')
-				b.WriteString(word)
-				col += 1 + w
-			default:
-				b.WriteByte('\n')
-				b.WriteString(word)
-				col = w
-			}
-		}
-	}
-	return b.String()
-}
-
 // LineGutter walks the message text line by line, word-wraps each
 // line independently to wrapWidth, and prepends a gutter character
 // to each wrapped sub-line. The gutter is yellow `▍` (228) on every
@@ -72,13 +38,13 @@ func LineGutter(text string, comments []Comment, wrapWidth int) (string, []int) 
 	var b strings.Builder
 	wrappedSrc := make([]int, 0, len(lines))
 	for i, ln := range lines {
-		var wrapped string
+		var wLines []string
 		if wrapWidth > 0 {
-			wrapped = wordWrap(ln, wrapWidth)
+			wrapped, _ := wrapLineWithRanges(ln, wrapWidth)
+			wLines = strings.Split(wrapped, "\n")
 		} else {
-			wrapped = ln
+			wLines = []string{ln}
 		}
-		wLines := strings.Split(wrapped, "\n")
 		for _, wl := range wLines {
 			if touched[i] {
 				b.WriteString(yellow)

@@ -217,9 +217,6 @@ func TestFileView_Hover_ShowsFullContent(t *testing.T) {
 	if got := m.hoverModal.viewport.View(); !strings.Contains(got, "second line") {
 		t.Errorf("hover modal dropped second line; got %q", got)
 	}
-	if m.hoverFooter != "" {
-		t.Errorf("hoverFooter should be empty when modal is used; got %q", m.hoverFooter)
-	}
 }
 
 // TestFileView_HoverModal_DismissedByAnyKey: any non-scroll key
