@@ -100,6 +100,20 @@ type lspPickerState struct {
 	workDir    string
 }
 
+// hoverModalState is the file-viewer hover pop-up. Visible flips
+// on when a HoverMsg resolves with content; the viewport holds
+// the (possibly multi-line) hover body and exposes j/k / PgUp /
+// PgDn / Ctrl-D / Ctrl-U for internal scrolling.
+//
+// ponytail: separate from hoverFooter (which used to be the
+// truncated one-line preview). The modal is the hover's primary
+// surface now; hoverFooter stays around only because
+// maybeHoverFooter and reflow() check it — and it's always empty.
+type hoverModalState struct {
+	visible  bool
+	viewport viewport.Model
+}
+
 // lspManager is the slice of *pinkylsp.Manager the model layer
 // uses. Declared as an interface so unit tests can substitute a
 // fake without spawning gopls.
@@ -239,6 +253,13 @@ type model struct {
 	// the file body and the help line. Cleared on any non-hover
 	// key press (see handleFileViewKey).
 	hoverFooter string
+
+	// hoverModal is the pop-up that replaced hoverFooter as the
+	// primary hover surface. Visible flips on when a HoverMsg
+	// resolves; the viewport is sized to fit the content (capped)
+	// and supports j/k/PgUp/PgDn/Ctrl-D/Ctrl-U for scrolling.
+	// Any other key dismisses.
+	hoverModal hoverModalState
 
 	// missingServerHint is the install hint shown when an LSP server
 	// binary is not on PATH. Set from LocationsMsg.ServerMissing /
@@ -547,10 +568,12 @@ func kindLabel(k pinkylsp.Kind) string {
 	return ""
 }
 
-// handleHoverMsg sets the one-line hover footer. Multi-line
-// content is truncated to the first line with an ellipsis
-// (spec D8). Empty content is silent (gopls returns a null hover
-// on whitespace — pinky treats that as no result).
+// handleHoverMsg opens the hover modal with the resolved content.
+// Empty / errored / server-missing replies stay silent (missing-
+// server surfaces through the install-hint footer instead, so the
+// user can still see it after dismissing the modal). The previous
+// one-line footer slot is gone; the modal is the hover's primary
+// surface now.
 func (m model) handleHoverMsg(msg pinkylsp.HoverMsg) (tea.Model, tea.Cmd) {
 	if msg.ServerMissing && msg.InstallHint != "" {
 		m.missingServerHint = msg.InstallHint
@@ -560,19 +583,63 @@ func (m model) handleHoverMsg(msg pinkylsp.HoverMsg) (tea.Model, tea.Cmd) {
 	if msg.Err != nil || msg.Contents == "" {
 		return m, nil
 	}
-	m.hoverFooter = truncateFirstLine(msg.Contents)
+	m.showHoverModal(msg.Contents)
 	m.refreshFileView()
 	return m, nil
 }
 
-// truncateFirstLine returns the substring of s up to the first
-// newline, with "…" appended if truncation happened. Used by the
-// hover footer to satisfy spec D8.
-func truncateFirstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i] + "…"
+// showHoverModal sizes and populates the modal's viewport for one
+// hover reply. Width is capped so the box doesn't stretch the
+// full terminal on wide screens; height is content-driven up to
+// ~15 rows so very long go-doc hovers stay scrollable. A custom
+// KeyMap restricts the viewport to scroll keys only — h, l, d, b,
+// f, space would otherwise conflict with the file viewer's own
+// bindings.
+func (m *model) showHoverModal(content string) {
+	width := m.width - 4
+	if width > 60 {
+		width = 60
 	}
-	return s
+	if width < 20 {
+		width = 20
+	}
+	contentLines := strings.Count(content, "\n") + 1
+	height := contentLines + 2 // +2 for the box's own padding/border
+	maxHeight := m.height - 8
+	if maxHeight < 5 {
+		maxHeight = 5
+	}
+	if maxHeight > 15 {
+		maxHeight = 15
+	}
+	if height > maxHeight {
+		height = maxHeight
+	}
+	if height < 3 {
+		height = 3
+	}
+	bodyW := width - 2 // border
+	bodyH := height - 2
+	if !m.hoverModal.visible {
+		m.hoverModal.viewport = viewport.New(
+			viewport.WithWidth(bodyW),
+			viewport.WithHeight(bodyH),
+		)
+		m.hoverModal.viewport.KeyMap = hoverModalKeyMap
+	}
+	m.hoverModal.viewport.SetWidth(bodyW)
+	m.hoverModal.viewport.SetHeight(bodyH)
+	m.hoverModal.viewport.SetContent(hoverModalBodyStyle.Render(content))
+	m.hoverModal.viewport.GotoTop()
+	m.hoverModal.visible = true
+}
+
+// hideHoverModal flips the modal off without touching its
+// viewport state — next showHoverModal resizes and resets.
+func (m *model) hideHoverModal() {
+	if m.hoverModal.visible {
+		m.hoverModal.visible = false
+	}
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1356,6 +1423,23 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 // c opens the comment composer, s flushes, d/R/K fire LSP
 // queries, Esc returns to dir nav, Tab returns to message tab.
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Hover modal: scroll keys route to the modal's viewport so
+	// long go-doc hovers stay readable; everything else dismisses
+	// and falls through to the normal handler (so `d` after `K`
+	// dismisses the modal AND fires the definition query).
+	if m.hoverModal.visible {
+		km := m.hoverModal.viewport.KeyMap
+		if key.Matches(msg, km.Down) || key.Matches(msg, km.Up) ||
+			key.Matches(msg, km.PageDown) || key.Matches(msg, km.PageUp) ||
+			key.Matches(msg, km.HalfPageDown) || key.Matches(msg, km.HalfPageUp) {
+			var vpCmd tea.Cmd
+			m.hoverModal.viewport, vpCmd = m.hoverModal.viewport.Update(msg)
+			return m, vpCmd
+		}
+		m.hideHoverModal()
+		m.refreshFileView()
+	}
+
 	// Esc is handled before rune routing so visual-mode exit feels
 	// like the message viewer's.
 	if isEsc(msg) {
@@ -1394,16 +1478,19 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshFileView()
 		return m, nil
 	case key.Matches(msg, defaultKeyMap.FileViewDefinition):
-		// ponytail: clear hover + missing-hint so a stale footer
-		// doesn't linger when the user fires a definition query.
-		m.hoverFooter = ""
+		// ponytail: clear the missing-hint footer so it doesn't
+		// linger when the user fires a new query. (The hover modal
+		// was already dismissed by the routing block above if it
+		// was open.)
 		m.missingServerHint = ""
 		return m, m.requestLSP(m.lsphub.RequestDefinition)
 	case key.Matches(msg, defaultKeyMap.FileViewReferences):
-		m.hoverFooter = ""
 		m.missingServerHint = ""
 		return m, m.requestLSP(m.lsphub.RequestReferences)
 	case key.Matches(msg, defaultKeyMap.FileViewHover):
+		// K while the modal is open: the modal-routing block above
+		// already dismissed it. Fire the new query as usual; the
+		// resulting HoverMsg replaces the modal content.
 		m.missingServerHint = ""
 		return m, m.requestLSP(m.lsphub.RequestHover)
 	}
@@ -1732,20 +1819,19 @@ func (m *model) exitFileViewer() {
 		full := m.fileRoot + "/" + m.fileViewer.path
 		m.lsp.DidClose(context.Background(), full)
 	}
-	m.hoverFooter = ""
+	m.hideHoverModal()
 	m.missingServerHint = ""
 	m.fileViewer.visual.Active = false
 	m.state = stateFileNav
 	m.reflow()
 }
 
-// clearHoverFooter drops the hover footer. Called from every
-// non-hover key in handleFileViewKey so the footer only lives
-// until the user does something else.
+// clearHoverFooter drops the missing-server-hint footer. The
+// name is a holdover from when this also cleared the (now-removed)
+// hover footer; the field is gone and the pop-up modal is
+// dismissed by handleFileViewKey's modal-routing block, so this
+// only needs to touch missingServerHint.
 func (m *model) clearHoverFooter() {
-	if m.hoverFooter != "" {
-		m.hoverFooter = ""
-	}
 	if m.missingServerHint != "" {
 		m.missingServerHint = ""
 	}
@@ -1803,7 +1889,7 @@ func (m *model) jumpToLocation(loc pinkylsp.Location) {
 	m.fileViewer.visual.CharA = char
 	m.scrollFileCursorIntoView()
 	m.refreshFileView()
-	m.hoverFooter = ""
+	m.hideHoverModal()
 }
 
 // openFileComment opens the comment composer with an anchor
@@ -2156,6 +2242,37 @@ var (
 // tries in order before falling back to a 2-line split on `/`.
 var headerAbbrevLevels = []int{2, 1}
 
+// hoverModalBoxStyle paints the hover pop-up as a rounded cyan
+// border with one-cell padding. The body itself is rendered in
+// cyan italic so the box reads as related to the old footer but
+// visually distinct from the file body underneath.
+var hoverModalBoxStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("51")).
+	Padding(0, 1)
+
+// hoverModalBodyStyle is the inner-body style: cyan italic, same
+// colour as the old hover footer so the pop-up reads as a
+// continuation of the existing accent.
+var hoverModalBodyStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("51")).
+	Italic(true)
+
+// hoverModalKeyMap restricts the modal's viewport to scroll keys
+// only. The viewport's default KeyMap binds h/l/b/f/space/etc.
+// — all of which would conflict with the file viewer's own
+// bindings and fire unwanted motions on the underlying cursor.
+// Scrolling keys route to the viewport; anything else falls
+// through to the modal's "dismiss + handle normally" path.
+var hoverModalKeyMap = viewport.KeyMap{
+	Down:         key.NewBinding(key.WithKeys("down", "j")),
+	Up:           key.NewBinding(key.WithKeys("up", "k")),
+	PageDown:     key.NewBinding(key.WithKeys("pgdown")),
+	PageUp:       key.NewBinding(key.WithKeys("pgup")),
+	HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d")),
+	HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u")),
+}
+
 func (m *model) refreshViewport() {
 	if m.latest.Text == "" {
 		m.lines = nil
@@ -2292,6 +2409,7 @@ func (m model) View() tea.View {
 			helpView,
 			m.statusLine(),
 		))
+		content = m.overlayHoverModal(content)
 	case stateLSPPicker:
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -2568,17 +2686,69 @@ func (m model) fileViewView() string {
 
 // maybeHoverFooter returns the one-line hover / install-hint row
 // when either is set; empty string otherwise. The footer sits
-// between the file body and the help line.
+// between the file body and the help line. Hover content lives
+// in the pop-up modal now (see showHoverModal / overlayHoverModal);
+// this footer only renders the install hint when an LSP server is
+// missing.
 func maybeHoverFooter(m model) string {
-	hoverStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Italic(true)
 	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Italic(true)
 	if m.missingServerHint != "" {
 		return hintStyle.Render("ⓘ " + m.missingServerHint)
 	}
-	if m.hoverFooter != "" {
-		return hoverStyle.Render("⎡ " + m.hoverFooter)
-	}
 	return ""
+}
+
+// renderHoverModal builds the bordered pop-up box from the
+// modal's viewport content. Returns empty when the modal is
+// hidden. Width is computed in showHoverModal; here we just
+// wrap with the box style.
+func (m model) renderHoverModal() string {
+	if !m.hoverModal.visible {
+		return ""
+	}
+	return hoverModalBoxStyle.Render(m.hoverModal.viewport.View())
+}
+
+// overlayHoverModal composites the hover pop-up onto the rendered
+// file-viewer content. The modal is anchored a couple of rows
+// below the cwd header (so the file-viewer title stays visible)
+// and centered vertically when the content is short. Replacement
+// is line-based: modal lines overwrite base lines starting at
+// topRow; lines outside that band are untouched, so the file
+// body's first rows + the help/status rows stay readable around
+// the modal.
+//
+// ponytail: ANSI codes in the base lines are preserved because
+// the modal box has its own self-contained styling and we only
+// replace full lines (not slice into them).
+func (m model) overlayHoverModal(content string) string {
+	modal := m.renderHoverModal()
+	if modal == "" {
+		return content
+	}
+	baseLines := strings.Split(content, "\n")
+	modalLines := strings.Split(modal, "\n")
+	// Anchor after the cwd header (tab row + cwd rows). m.headerHeight
+	// is the count set by reflow(); the modal sits just below it.
+	topRow := m.headerHeight
+	if topRow < 2 {
+		topRow = 2
+	}
+	// Clamp so the modal's last line fits inside the base content;
+	// otherwise the help / status rows at the bottom get hidden.
+	if topRow+len(modalLines) >= len(baseLines)-2 {
+		topRow = len(baseLines) - len(modalLines) - 2
+		if topRow < m.headerHeight {
+			topRow = m.headerHeight
+		}
+	}
+	for i, line := range modalLines {
+		row := topRow + i
+		if row >= 0 && row < len(baseLines) {
+			baseLines[row] = line
+		}
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 // lspPickerView renders the stateLSPPicker: a header showing the

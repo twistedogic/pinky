@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -185,48 +186,147 @@ func TestFileView_References_AlwaysPicker(t *testing.T) {
 	}
 }
 
-// TestFileView_Hover_SetsFooter: a non-empty HoverMsg sets the
-// hover footer. Spec D8 / scenario "`K` on an identifier
-// renders the hover footer".
-func TestFileView_Hover_SetsFooter(t *testing.T) {
+// TestFileView_Hover_ShowsModal: a non-empty HoverMsg opens the
+// hover modal with the content visible in its viewport. Spec D8 /
+// scenario "`K` on an identifier renders the hover popup".
+func TestFileView_Hover_ShowsModal(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
 	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "func Foo() error"})
 	m = updatedModelPtr(upd)
-	if m.hoverFooter != "func Foo() error" {
-		t.Errorf("hoverFooter = %q; want %q", m.hoverFooter, "func Foo() error")
+	if !m.hoverModal.visible {
+		t.Fatal("hover modal not visible after HoverMsg")
+	}
+	if got := strings.TrimSpace(m.hoverModal.viewport.View()); !strings.Contains(got, "func Foo() error") {
+		t.Errorf("hover modal content missing body; got %q", got)
 	}
 }
 
-// TestFileView_Hover_TruncatesMultiLine: a HoverMsg whose
-// Contents has a newline gets truncated to the first line with
-// an ellipsis. Spec D8 / scenario "Multi-line hover content is
-// truncated".
-func TestFileView_Hover_TruncatesMultiLine(t *testing.T) {
+// TestFileView_Hover_ShowsFullContent: multi-line hover content
+// is rendered without truncation. Spec D8 — the modal is
+// scrollable; truncation lives in the viewport, not in the
+// content path.
+func TestFileView_Hover_ShowsFullContent(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
 	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "first line\nsecond line\nthird"})
 	m = updatedModelPtr(upd)
-	if m.hoverFooter != "first line…" {
-		t.Errorf("hoverFooter = %q; want %q", m.hoverFooter, "first line…")
+	if !m.hoverModal.visible {
+		t.Fatal("hover modal not visible after HoverMsg")
+	}
+	if got := m.hoverModal.viewport.View(); !strings.Contains(got, "second line") {
+		t.Errorf("hover modal dropped second line; got %q", got)
+	}
+	if m.hoverFooter != "" {
+		t.Errorf("hoverFooter should be empty when modal is used; got %q", m.hoverFooter)
 	}
 }
 
-// TestFileView_HoverFooter_DismissedByOtherKey: any non-hover
-// key clears the hover footer. Spec D8 / scenario "`j` clears
-// the hover footer".
-func TestFileView_HoverFooter_DismissedByOtherKey(t *testing.T) {
+// TestFileView_HoverModal_DismissedByAnyKey: any non-scroll key
+// dismisses the hover modal. Matches the design choice that the
+// popup behaves like a fzf preview / vim quickfix window — first
+// keypress (other than the scroll keys) drops it.
+func TestFileView_HoverModal_DismissedByAnyKey(t *testing.T) {
 	m := attachFileFixture(t)
 	openFile(t, m, "src/main.go")
 	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "func Foo()"})
 	m = updatedModelPtr(upd)
-	if m.hoverFooter == "" {
-		t.Fatal("setup: hoverFooter not set after HoverMsg")
+	if !m.hoverModal.visible {
+		t.Fatal("setup: hover modal not visible after HoverMsg")
 	}
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updatedModelPtr(upd)
+	if m.hoverModal.visible {
+		t.Errorf("hover modal still visible after `a`; want dismissed")
+	}
+}
+
+// TestFileView_HoverModal_ScrollKeysScrollNotDismiss: the modal
+// has its own viewport, so j/k and PgDn/PgUp scroll it instead
+// of dismissing the popup or moving the file cursor. Without
+// this carve-out the modal isn't really scrollable.
+func TestFileView_HoverModal_ScrollKeysScrollNotDismiss(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	// Long content so j has something to scroll past.
+	lines := []string{}
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: strings.Join(lines, "\n")})
+	m = updatedModelPtr(upd)
+	before := m.hoverModal.viewport.YOffset()
+
 	upd, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updatedModelPtr(upd)
-	if m.hoverFooter != "" {
-		t.Errorf("hoverFooter = %q; want empty after j", m.hoverFooter)
+
+	if !m.hoverModal.visible {
+		t.Fatal("hover modal dismissed by j; want it to scroll instead")
+	}
+	if m.hoverModal.viewport.YOffset() <= before {
+		t.Errorf("j did not scroll modal: yOffset before=%d after=%d", before, m.hoverModal.viewport.YOffset())
+	}
+}
+
+// TestFileView_HoverModal_RefiresReplace: pressing K while the
+// modal is open replaces the content. (The handler dismisses the
+// old modal then issues a new query; the new HoverMsg populates
+// a fresh modal.)
+func TestFileView_HoverModal_RefiresReplace(t *testing.T) {
+	m := attachFileFixture(t)
+	m.lsphub = &fakeBridge{}
+	openFile(t, m, "src/main.go")
+	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "func Old()"})
+	m = updatedModelPtr(upd)
+	// K while modal open → dismiss + new query.
+	upd, _ = m.Update(tea.KeyPressMsg{Code: 'K', Text: "K"})
+	m = updatedModelPtr(upd)
+	// Simulate the reply arriving.
+	upd, _ = m.Update(pinkylsp.HoverMsg{Contents: "func New()"})
+	m = updatedModelPtr(upd)
+	if got := m.hoverModal.viewport.View(); !strings.Contains(got, "func New()") {
+		t.Errorf("after re-K, modal content missing new body; got %q", got)
+	}
+	if strings.Contains(m.hoverModal.viewport.View(), "func Old()") {
+		t.Errorf("old hover content still present after re-K")
+	}
+}
+
+// TestFileView_HoverModal_RendersIntoView: after a HoverMsg, the
+// modal's bordered box appears in the rendered View(). Verifies
+// overlay wiring (not just state) end-to-end.
+func TestFileView_HoverModal_RendersIntoView(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "func Foo() error"})
+	m = updatedModelPtr(upd)
+	rendered := m.View().Content
+	if !strings.Contains(rendered, "func Foo() error") {
+		t.Errorf("View() did not include hover content; got:\n%s", rendered)
+	}
+	// Border characters from lipgloss.RoundedBorder.
+	if !strings.Contains(rendered, "╭") && !strings.Contains(rendered, "+") {
+		t.Errorf("View() did not include a border; got:\n%s", rendered)
+	}
+}
+
+// TestFileView_MissingServerHint_StaysInFooter: a missing-server
+// reply still sets the footer hint (NOT the modal) — errors stay
+// visible until acknowledged, while hover is a transient popup.
+func TestFileView_MissingServerHint_StaysInFooter(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	upd, _ := m.Update(pinkylsp.LocationsMsg{
+		ServerMissing: true,
+		InstallHint:   "go install golang.org/x/tools/gopls@latest",
+		WorkDir:       m.fileRoot,
+	})
+	m = updatedModelPtr(upd)
+	if m.missingServerHint == "" {
+		t.Errorf("expected missingServerHint to be set on the model")
+	}
+	if m.hoverModal.visible {
+		t.Errorf("missing-server hint should not open the hover modal")
 	}
 }
 
