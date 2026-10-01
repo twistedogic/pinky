@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	pinkylsp "github.com/twistedogic/pinky/internal/lsp"
 	"github.com/twistedogic/pinky/internal/render"
 	"github.com/twistedogic/pinky/internal/session"
+	"github.com/twistedogic/pinky/internal/todo"
 	"github.com/twistedogic/pinky/internal/workspace"
 )
 
@@ -43,6 +45,8 @@ const (
 	stateCommentComposer
 	stateFileNav
 	stateFileView
+	stateTodoList
+	stateTodoEdit
 	stateLSPPicker
 	stateError
 )
@@ -71,6 +75,7 @@ type tab int
 const (
 	tabMessage tab = iota
 	tabFiles
+	tabTodos
 )
 
 // fileSelection is the file viewer's visual selection range. The
@@ -198,11 +203,13 @@ type model struct {
 	// the comments appendix. Toggled by Ctrl+I in compose mode.
 	includeComments bool
 
-	// Tab state. m.tab records which top-level view is active;
-	// m.fileReturn remembers the file-review sub-state the user
-	// left, so Tab round-trips restore it.
-	tab        tab
-	fileReturn state
+	// Tab state. m.tab records which top-level view is active.
+	// Each tab saves the sub-state of the OTHER tabs so Tab
+	// round-trips restore the view the user left in each.
+	tab            tab
+	messageReturn  state
+	fileReturn     state
+	todoReturn     state
 
 	// File review tab state. fileEntries is the flat workspace
 	// tree produced by workspace.Walk; fileCollapsed hides every
@@ -212,6 +219,15 @@ type model struct {
 	fileCollapsed map[string]bool
 	fileCursor    int
 	fileRoot      string
+
+	// Todo tab state. m.todos is the in-memory list (persisted to
+	// ~/.local/share/pinky/<base(m.fileRoot)>/todos.json).
+	// m.todoCursor indexes into m.todos. m.todoEdit is the buffer
+	// for stateTodoEdit.
+	todos      []todo.Item
+	todoCursor int
+	todoEdit   string
+	todoPath   string
 
 	// headerHeight is the number of terminal rows the top header
 	// occupies (1 or 2). Recomputed by reflow() so other layout
@@ -385,6 +401,13 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 			m.lsphub = pinkylsp.NewBridge(mgr)
 		}
 	}
+
+	// Wire todo storage: ~/.local/share/pinky/<base(cwd)>/todos.json.
+	// No XDG fallback per the add-todo-tab change.
+	if m.fileRoot != "" {
+		m.todoPath = todoStoragePath(m.fileRoot)
+		m.refreshTodos()
+	}
 }
 
 // attach opens a session source + history for the given pane, then
@@ -401,6 +424,63 @@ func (m *model) attach(pane string) error {
 	}
 	m.idle(src, hist, pane)
 	return nil
+}
+
+// refreshTodos loads m.todos from m.todoPath. A missing file is
+// treated as an empty list (no error surfaced to the user). Called
+// at attach time and after every save.
+func (m *model) refreshTodos() {
+	if m.todoPath == "" {
+		m.todos = nil
+		return
+	}
+	items, err := todo.Load(m.todoPath)
+	if err != nil {
+		if errors.Is(err, todo.ErrNotFound) {
+			m.todos = nil
+			return
+		}
+		// Surface other errors via the placeholder; don't crash.
+		m.todos = nil
+		return
+	}
+	m.todos = items
+}
+
+// persistTodos writes m.todos to m.todoPath atomically. Called on
+// every mutation (add, toggle, edit, delete).
+func (m *model) persistTodos() {
+	if m.todoPath == "" {
+		return
+	}
+	if err := todo.Save(m.todoPath, m.todos); err != nil {
+		// Surface via placeholder (TODO: wired in render).
+		_ = err
+	}
+}
+
+// todoStoragePath computes the on-disk path for the given pane cwd.
+// Hard-coded to ~/.local/share/pinky; no XDG fallback per the
+// add-todo-tab change. Two cwds with the same last segment
+// intentionally share a file.
+func todoStoragePath(cwd string) string {
+	return filepath.Join(todoHomeDir(), filepath.Base(cwd), "todos.json")
+}
+
+// todoHomeDir is the root under which per-workspace todo files
+// live. Default is ~/.local/share/pinky; tests override via
+// todoHomeDirOverride.
+var todoHomeDirOverride string
+
+func todoHomeDir() string {
+	if todoHomeDirOverride != "" {
+		return todoHomeDirOverride
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "pinky")
+	}
+	return filepath.Join(home, ".local", "share", "pinky")
 }
 
 func (m *model) selectAgent(idx int) error {
@@ -678,6 +758,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFileNavKey(msg)
 	case stateFileView:
 		return m.handleFileViewKey(msg)
+	case stateTodoList:
+		return m.handleTodoListKey(msg)
+	case stateTodoEdit:
+		return m.handleTodoEditKey(msg)
 	case stateLSPPicker:
 		return m.handleLSPPickerKey(msg)
 	case stateError:
@@ -690,31 +774,81 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleTab switches between the message tab and the file review
-// tab, remembering / restoring the sub-state so Tab round-trips are
-// cheap.
+// toggleTab advances one slot in the M → F → T → M cycle, saving
+// the current sub-state to the slot for the tab we're leaving and
+// restoring the saved sub-state for the tab we're entering.
 func (m *model) toggleTab() tea.Cmd {
 	switch m.tab {
 	case tabMessage:
-		// Remember the message sub-state so Tab back returns to it.
-		m.fileReturn = m.state
+		// Save message sub-state; advance to files.
+		m.messageReturn = m.clampMessageState(m.state)
 		m.tab = tabFiles
-		if len(m.fileEntries) == 0 {
+		m.state = m.clampFileState(m.fileReturn)
+		if m.state == stateFileNav && len(m.fileEntries) == 0 {
 			m.enterFileNav()
 		}
-		m.state = stateFileNav
 		m.reflow()
 	case tabFiles:
+		// Save file sub-state; advance to todos.
+		m.fileReturn = m.clampFileState(m.state)
+		m.tab = tabTodos
+		m.state = m.clampTodoState(m.todoReturn)
+		m.reflow()
+	case tabTodos:
+		// Save todo sub-state; cycle back to message.
+		m.todoReturn = m.clampTodoState(m.state)
 		m.tab = tabMessage
-		restore := m.fileReturn
-		if restore != stateNav && restore != stateCompose {
-			restore = stateNav
-		}
-		m.state = restore
+		m.state = m.clampMessageState(m.messageReturn)
 		m.fileViewer.visual.Active = false
 		m.reflow()
 		m.refreshViewport()
 	}
+	return nil
+}
+
+// clampMessageState / clampFileState / clampTodoState coerce a
+// possibly-stale return-state value into a valid sub-state for
+// the destination tab. Anything outside the tab's allowed states
+// (or zero) becomes the tab's default entry state.
+func (m *model) clampMessageState(s state) state {
+	if s != stateNav && s != stateCompose {
+		return stateNav
+	}
+	return s
+}
+
+func (m *model) clampFileState(s state) state {
+	if s != stateFileNav && s != stateFileView {
+		return stateFileNav
+	}
+	return s
+}
+
+func (m *model) clampTodoState(s state) state {
+	if s != stateTodoList && s != stateTodoEdit {
+		return stateTodoList
+	}
+	return s
+}
+
+// escapeToMessage jumps back to the message tab from any other
+// tab, saving the current tab's sub-state so a Tab round-trip
+// restores it. Bound to `Esc` in the file and todo tabs (Tab
+// cycles forward; Esc shortcuts directly to message).
+func (m *model) escapeToMessage() tea.Cmd {
+	switch m.tab {
+	case tabMessage:
+		return nil
+	case tabFiles:
+		m.fileReturn = m.clampFileState(m.state)
+	case tabTodos:
+		m.todoReturn = m.clampTodoState(m.state)
+	}
+	m.tab = tabMessage
+	m.state = m.clampMessageState(m.messageReturn)
+	m.fileViewer.visual.Active = false
+	m.reflow()
+	m.refreshViewport()
 	return nil
 }
 
@@ -1161,7 +1295,7 @@ func (m model) handleFileNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	visible := m.visibleFileEntries()
 	if isEsc(msg) || key.Matches(msg, defaultKeyMap.FileNavBack) {
-		return m, m.toggleTab()
+		return m, m.escapeToMessage()
 	}
 	switch {
 	case isKeyRune(msg, 'q'):
@@ -1605,6 +1739,98 @@ func (m *model) moveLSPPickerCursor(delta int) {
 		return
 	}
 	m.lspPicker.cursor = min(max(m.lspPicker.cursor+delta, 0), n-1)
+}
+
+// handleTodoListKey drives the todo list view. Keys per the
+// add-todo-tab spec: j/k move the cursor, a opens the editor on a
+// blank item, space toggles done, e edits, d deletes, Esc jumps
+// back to the message tab, Tab cycles to the next tab, q quits.
+// `s` is intentionally absent — todos are personal and never
+// flushed to the agent.
+func (m model) handleTodoListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if isEsc(msg) {
+		return m, m.escapeToMessage()
+	}
+	switch {
+	case isKeyRune(msg, 'q'):
+		return m, tea.Quit
+	case isKeyRune(msg, 'j') || key.Matches(msg, defaultKeyMap.Down):
+		m.moveTodoCursor(+1)
+	case isKeyRune(msg, 'k') || key.Matches(msg, defaultKeyMap.Up):
+		m.moveTodoCursor(-1)
+	case isKeyRune(msg, 'a'):
+		m.todos = append(m.todos, todo.Item{})
+		m.todoCursor = len(m.todos) - 1
+		m.todoEdit = ""
+		m.state = stateTodoEdit
+		m.persistTodos()
+	case isKeyRune(msg, ' '):
+		if m.todoCursor >= 0 && m.todoCursor < len(m.todos) {
+			m.todos[m.todoCursor].Done = !m.todos[m.todoCursor].Done
+			m.persistTodos()
+		}
+	case isKeyRune(msg, 'e'):
+		if m.todoCursor >= 0 && m.todoCursor < len(m.todos) {
+			m.todoEdit = m.todos[m.todoCursor].Text
+			m.state = stateTodoEdit
+		}
+	case isKeyRune(msg, 'd'):
+		if len(m.todos) > 0 && m.todoCursor >= 0 && m.todoCursor < len(m.todos) {
+			m.todos = append(m.todos[:m.todoCursor], m.todos[m.todoCursor+1:]...)
+			if m.todoCursor >= len(m.todos) {
+				m.todoCursor = max(0, len(m.todos)-1)
+			}
+			m.persistTodos()
+		}
+	}
+	return m, nil
+}
+
+// moveTodoCursor clamps m.todoCursor into [0, len-1].
+func (m *model) moveTodoCursor(delta int) {
+	n := len(m.todos)
+	if n == 0 {
+		m.todoCursor = 0
+		return
+	}
+	m.todoCursor = min(max(m.todoCursor+delta, 0), n-1)
+}
+
+// handleTodoEditKey drives the todo edit view. Enter commits the
+// edit to the focused item, persists, and returns to stateTodoList.
+// Esc discards the edit and returns to stateTodoList. Tab / q
+// behave the same as in the list view.
+func (m model) handleTodoEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if isEsc(msg) {
+		m.todoEdit = ""
+		m.state = stateTodoList
+		return m, nil
+	}
+	if key.Matches(msg, defaultKeyMap.Tab) {
+		return m, m.toggleTab()
+	}
+	kp, ok := msg.(tea.KeyPressMsg)
+	switch {
+	case isKeyRune(msg, 'q'):
+		return m, tea.Quit
+	case ok && kp.Code == tea.KeyEnter:
+		if m.todoCursor >= 0 && m.todoCursor < len(m.todos) {
+			m.todos[m.todoCursor].Text = m.todoEdit
+			m.persistTodos()
+		}
+		m.todoEdit = ""
+		m.state = stateTodoList
+	case ok && kp.Code == tea.KeyBackspace:
+		runes := []rune(m.todoEdit)
+		if len(runes) > 0 {
+			m.todoEdit = string(runes[:len(runes)-1])
+		}
+	default:
+		if ok && len(kp.Text) > 0 {
+			m.todoEdit += kp.Text
+		}
+	}
+	return m, nil
 }
 
 // dismissLSPPicker returns to stateFileView and clears the picker
@@ -2110,6 +2336,20 @@ func (m model) ShortHelp() []key.Binding {
 			defaultKeyMap.Tab,
 			defaultKeyMap.Help,
 		}
+	case stateTodoList:
+		return []key.Binding{
+			defaultKeyMap.Up, defaultKeyMap.Down,
+			defaultKeyMap.Tab,
+			defaultKeyMap.Help,
+			defaultKeyMap.QuitPick,
+		}
+	case stateTodoEdit:
+		return []key.Binding{
+			defaultKeyMap.SaveComment,
+			defaultKeyMap.Cancel,
+			defaultKeyMap.Tab,
+			defaultKeyMap.Help,
+		}
 	case stateLSPPicker:
 		return []key.Binding{
 			defaultKeyMap.Up, defaultKeyMap.Down,
@@ -2217,6 +2457,7 @@ var (
 // chrome (header cwd, picker row labels). Same color as
 // statusBarStyle foreground so the dim palette stays consistent.
 var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+var strikeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true)
 
 // headerStyle / selectedStyle / normalStyle are the recurring
 // row-render trio: bold magenta for the section header, bold
@@ -2410,6 +2651,21 @@ func (m model) View() tea.View {
 			m.statusLine(),
 		))
 		content = m.overlayHoverModal(content)
+	case stateTodoList:
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			m.todoListView(),
+			helpView,
+			m.statusLine(),
+		))
+	case stateTodoEdit:
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			m.todoListView(),
+			m.todoEditView(),
+			helpView,
+			m.statusLine(),
+		))
 	case stateLSPPicker:
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -2531,15 +2787,25 @@ func (m *model) headerView() string {
 	return tabRow + "\n" + padRight(m.headerLine(path, count), width)
 }
 
-// tabHeader renders the two-cell row above the cwd header. Active
-// cell carries the filled background; inactive is dim. Layout per
-// `tab-header` spec: cell1 (" Message "), one space, cell2
-// (" Files ").
+// tabHeader renders the three-cell row above the cwd header in
+// canonical Message / Files / Todos order. The active cell carries
+// the filled background; inactive cells are dim. Per the
+// `tab-header` and `add-todo-tab` specs.
 func (m *model) tabHeader() string {
-	if m.tab == tabFiles {
-		return inactiveTabStyle.Render("Message") + " " + activeTabStyle.Render("Files")
+	msgStyle := inactiveTabStyle
+	fileStyle := inactiveTabStyle
+	todoStyle := inactiveTabStyle
+	switch m.tab {
+	case tabMessage:
+		msgStyle = activeTabStyle
+	case tabFiles:
+		fileStyle = activeTabStyle
+	case tabTodos:
+		todoStyle = activeTabStyle
 	}
-	return activeTabStyle.Render("Message") + " " + inactiveTabStyle.Render("Files")
+	return msgStyle.Render("Message") + " " +
+		fileStyle.Render("Files") + " " +
+		todoStyle.Render("Todos")
 }
 
 // headerLine builds one row of the header: dim cwd on the left,
@@ -2665,6 +2931,45 @@ func (m model) renderFileContent() string {
 		fmt.Fprintf(&b, "%s %*d  %s\n", gutter, width, ln, rendered)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// todoListView renders the structured todo list (stateTodoList /
+// stateTodoEdit). Each item is one row: `[ ]` or `[x]` + the
+// item's text. The focused row carries a `▶` marker; the cursor
+// wraps at the list ends.
+func (m model) todoListView() string {
+	if len(m.todos) == 0 {
+		return dimStyle.Render("(no todos — press a to add)")
+	}
+	var b strings.Builder
+	for i, item := range m.todos {
+		marker := "▶"
+		box := "[ ]"
+		style := dimStyle
+		if item.Done {
+			box = "[x]"
+			style = strikeStyle
+		}
+		if i == m.todoCursor {
+			marker = "▶"
+			style = lipgloss.NewStyle().Bold(true)
+		} else {
+			marker = " "
+		}
+		row := fmt.Sprintf("%s %s %s", marker, box, item.Text)
+		b.WriteString(style.Render(row))
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// todoEditView renders the inline edit input beneath the list
+// while in stateTodoEdit. Enter commits, Esc cancels.
+func (m model) todoEditView() string {
+	if m.state != stateTodoEdit {
+		return ""
+	}
+	return fmt.Sprintf("> %s_", m.todoEdit)
 }
 
 // fileViewView renders the file-viewer header (path + optional

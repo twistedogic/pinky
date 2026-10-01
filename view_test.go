@@ -198,7 +198,8 @@ func tabHeaderFirstLine(t *testing.T, m model) string {
 func TestTabHeader_PresentInAttachedStates(t *testing.T) {
 	attached := []state{
 		stateNav, stateCompose, stateCommentComposer,
-		stateFileNav, stateFileView, stateLSPPicker,
+		stateFileNav, stateFileView, stateTodoList, stateTodoEdit,
+		stateLSPPicker,
 	}
 	for _, st := range attached {
 		t.Run(stateName(st), func(t *testing.T) {
@@ -314,7 +315,41 @@ func TestTabHeader_FixedCellOrder(t *testing.T) {
 	}
 }
 
-// TestTabHeader_FoldsIntoHeaderHeight: headerHeight accounts for
+// TestTabHeader_ThreeCells: row renders all three cells in the
+// canonical Message / Files / Todos order for every tab value.
+// Regression for the 2-cell implementation that omitted Todos.
+func TestTabHeader_ThreeCells(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		tab  tab
+	}{
+		{"tabMessage", tabMessage},
+		{"tabFiles", tabFiles},
+		{"tabTodos", tabTodos},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := newIdleModelForKeymap(t)
+			m.tab = c.tab
+			m.reflow()
+			stripped := ansi.Strip(tabHeaderFirstLine(t, m))
+			msgIdx := strings.Index(stripped, "Message")
+			filesIdx := strings.Index(stripped, "Files")
+			todoIdx := strings.Index(stripped, "Todos")
+			if msgIdx < 0 {
+				t.Fatalf("row missing 'Message'; got %q", stripped)
+			}
+			if filesIdx < 0 {
+				t.Fatalf("row missing 'Files'; got %q", stripped)
+			}
+			if todoIdx < 0 {
+				t.Fatalf("row missing 'Todos'; got %q", stripped)
+			}
+			if !(msgIdx < filesIdx && filesIdx < todoIdx) {
+				t.Errorf("cells must appear in canonical order Message / Files / Todos; got %q", stripped)
+			}
+		})
+	}
+}
 // the tab row on top of the (1- or 2-line) cwd header.
 func TestTabHeader_FoldsIntoHeaderHeight(t *testing.T) {
 	// 1-line cwd + tab row.
@@ -378,6 +413,10 @@ func stateName(s state) string {
 		return "stateFileNav"
 	case stateFileView:
 		return "stateFileView"
+	case stateTodoList:
+		return "stateTodoList"
+	case stateTodoEdit:
+		return "stateTodoEdit"
 	case stateLSPPicker:
 		return "stateLSPPicker"
 	case stateError:

@@ -14,30 +14,36 @@ currently-open file.
 
 ### Requirement: Tab toggle between message and file views
 
-The system SHALL provide a `Tab` keybinding that toggles between
-the message view (`stateNav`) and the file review tab (one of
-`stateFileNav` / `stateFileView`). `Tab` SHALL be active in every
-state except the comment composer, the picker, and the error
-screen. Toggling from the message view to the file tab SHALL
-enter `stateFileNav` (the dir navigator). Toggling from the
-file tab back to the message view SHALL restore the message-view
-state the user left (nav or compose).
+The system SHALL provide a `Tab` keybinding that cycles between
+the message view (`stateNav`), the file review tab (one of
+`stateFileNav` / `stateFileView`), and the todo tab
+(`stateTodoList`). The cycle order SHALL be Message → Files →
+Todos → Message. `Tab` SHALL be active in every state except the
+comment composer, the picker, and the error screen. Cycling into
+a tab SHALL enter that tab's default sub-state (message:
+`stateNav`, files: `stateFileNav`, todos: `stateTodoList`).
+Cycling back to a previously-visited tab SHALL restore the
+sub-state the user left in that tab.
 
 #### Scenario: Tab from message view opens dir navigator
-
 - **WHEN** the user presses `Tab` in `stateNav`
 - **THEN** the TUI enters `stateFileNav` and the dir navigator
   is the active view
 
 #### Scenario: Tab from file view returns to message view
-
 - **WHEN** the user presses `Tab` in `stateFileNav` or
   `stateFileView`
-- **THEN** the TUI returns to `stateNav` (or the message-view
-  state the user toggled away from)
+- **THEN** the TUI advances one tab in the cycle (enters
+  `stateTodoList`); two more `Tab` presses complete the cycle
+  back to the message view
+
+#### Scenario: Tab from todo tab returns to message tab
+- **WHEN** the user presses `Tab` in `stateTodoList` or
+  `stateTodoEdit`
+- **THEN** the TUI returns to the message-view state the user
+  toggled away from (nav or compose)
 
 #### Scenario: Tab in composer is a no-op
-
 - **WHEN** the user presses `Tab` in `stateCommentComposer`,
   `statePicking`, or `stateError`
 - **THEN** the state is unchanged
@@ -122,7 +128,7 @@ In `stateFileNav` the system SHALL provide the following keys:
 | `c`       | on a file → open comment composer with whole-file anchor |
 | `s`       | submit all accumulated comments |
 | `Esc`     | return to message view |
-| `Tab`     | return to message view |
+| `Tab`     | advance to the next tab in the cycle |
 | `q`       | quit pinky |
 | `?`       | toggle short / full help overlay |
 
@@ -172,6 +178,10 @@ In `stateFileNav` the system SHALL provide the following keys:
   `c`
 - **THEN** the TUI remains in `stateFileNav` and no composer
   is opened
+
+#### Scenario: Tab from dir navigator advances to todo tab
+- **WHEN** the user presses `Tab` in `stateFileNav`
+- **THEN** the TUI enters `stateTodoList`
 
 ### Requirement: File viewer renders raw text with line numbers
 
@@ -351,7 +361,7 @@ moving end; visual mode stores only an anchor.
 | `R`       | send `textDocument/references` at the **word under the cursor**; picker on N≥1, silent on 0 |
 | `K`       | send `textDocument/hover` at the **word under the cursor**; render footer on 1+, silent on 0 |
 | `s`       | submit all accumulated comments |
-| `Tab`     | return to message view |
+| `Tab`     | advance to the next tab in the cycle |
 | `q`       | quit pinky |
 | `?`       | toggle short / full help overlay |
 
@@ -534,14 +544,16 @@ request SHALL be sent at `charPos` unchanged.
 #### Scenario: `Tab` returns to message view
 
 - **WHEN** the user presses `Tab` in `stateFileView`
-- **THEN** the TUI returns to `stateNav`; pressing `Tab` again
-  returns the user to `stateFileView` at the same file
+- **THEN** the TUI advances one tab in the cycle (enters
+  `stateTodoList`); two more `Tab` presses complete the cycle
+  back to the message view
 
 #### Scenario: `Tab` preserves visual across the round-trip
 
 - **WHEN** the user is in `stateFileView` with visual active
-  (anchor at `(5, 4)`, cursor at `(7, 9)`) and presses `Tab`,
-  then presses `Tab` again to return to the file viewer
+  (anchor at `(5, 4)`, cursor at `(7, 9)`) and presses `Tab` to
+  enter `stateTodoList`, then presses `Tab` twice more (Todos
+  → Message → Files) to return to the file viewer
 - **THEN** the TUI is back in `stateFileView` with visual still
   active and the anchor and cursor positions unchanged
   (`(5, 4)` and `(7, 9)` respectively); the cyan selection

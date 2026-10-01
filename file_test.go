@@ -87,9 +87,11 @@ func visiblePathList(es []workspace.Entry) []string {
 	return out
 }
 
-// TestTab_TogglesBetweenMessageAndFiles: Tab from stateNav enters
-// stateFileNav; Tab back returns to stateNav.
-func TestTab_TogglesBetweenMessageAndFiles(t *testing.T) {
+// TestTab_CyclesThreeTabs: Tab cycles Message → Files → Todos →
+// Message. The 2-way toggle test was retired when the third tab
+// landed; see TestTab_CycleOrder in cycle_test.go for the
+// sub-state preservation invariants.
+func TestTab_CyclesThreeTabs(t *testing.T) {
 	root, _, _ := fileFixtureTree(t)
 	m := newIdleModelForKeymap(t)
 	m.fileRoot = root
@@ -98,22 +100,35 @@ func TestTab_TogglesBetweenMessageAndFiles(t *testing.T) {
 	m.refreshViewport()
 
 	tab := tea.KeyPressMsg{Code: tea.KeyTab}
+
+	// Message → Files
 	updated, _ := m.Update(tab)
 	um := updated.(model)
 	if um.tab != tabFiles {
-		t.Errorf("expected tabFiles; got %v", um.tab)
+		t.Errorf("after 1st Tab: expected tabFiles; got %v", um.tab)
 	}
 	if um.state != stateFileNav {
-		t.Errorf("expected stateFileNav; got %v", um.state)
+		t.Errorf("after 1st Tab: expected stateFileNav; got %v", um.state)
 	}
 
+	// Files → Todos
 	updated, _ = um.Update(tab)
 	um2 := updated.(model)
-	if um2.tab != tabMessage {
-		t.Errorf("expected tabMessage; got %v", um2.tab)
+	if um2.tab != tabTodos {
+		t.Errorf("after 2nd Tab: expected tabTodos; got %v", um2.tab)
 	}
-	if um2.state != stateNav {
-		t.Errorf("expected stateNav; got %v", um2.state)
+	if um2.state != stateTodoList {
+		t.Errorf("after 2nd Tab: expected stateTodoList; got %v", um2.state)
+	}
+
+	// Todos → Message
+	updated, _ = um2.Update(tab)
+	um3 := updated.(model)
+	if um3.tab != tabMessage {
+		t.Errorf("after 3rd Tab: expected tabMessage; got %v", um3.tab)
+	}
+	if um3.state != stateNav {
+		t.Errorf("after 3rd Tab: expected stateNav; got %v", um3.state)
 	}
 }
 
