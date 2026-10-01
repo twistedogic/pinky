@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -510,6 +511,13 @@ func pollCmd(src session.Source) tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if r := recover(); r != nil {
+		fmt.Fprintf(os.Stderr,
+			"pinky: panic in Update (state=%d, file=%q, cursor=%d/%d): %v\n%s\n",
+			m.state, m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
+			r, debug.Stack())
+		panic(r)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1551,6 +1559,14 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 // c opens the comment composer, s flushes, d/R/K fire LSP
 // queries, Esc returns to dir nav, Tab returns to message tab.
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if r := recover(); r != nil {
+		fmt.Fprintf(os.Stderr,
+			"pinky: panic in handleFileViewKey (file=%q, cursor=%d/%d, lines=%d, visual=%v): %v\n%s\n",
+			m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
+			len(m.fileViewer.lines), m.fileViewer.visual.Active, r,
+			debug.Stack())
+		panic(r)
+	}
 	// Hover modal: scroll keys route to the modal's viewport so
 	// long go-doc hovers stay readable; everything else dismisses
 	// and falls through to the normal handler (so `d` after `K`
@@ -1611,15 +1627,24 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// was already dismissed by the routing block above if it
 		// was open.)
 		m.missingServerHint = ""
+		if m.lsphub == nil {
+			return m, nil
+		}
 		return m, m.requestLSP(m.lsphub.RequestDefinition)
 	case key.Matches(msg, defaultKeyMap.FileViewReferences):
 		m.missingServerHint = ""
+		if m.lsphub == nil {
+			return m, nil
+		}
 		return m, m.requestLSP(m.lsphub.RequestReferences)
 	case key.Matches(msg, defaultKeyMap.FileViewHover):
 		// K while the modal is open: the modal-routing block above
 		// already dismissed it. Fire the new query as usual; the
 		// resulting HoverMsg replaces the modal content.
 		m.missingServerHint = ""
+		if m.lsphub == nil {
+			return m, nil
+		}
 		return m, m.requestLSP(m.lsphub.RequestHover)
 	}
 

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	pinkylsp "github.com/twistedogic/pinky/internal/lsp"
 	"github.com/twistedogic/pinky/internal/session"
 	"github.com/twistedogic/pinky/internal/tmux"
 )
@@ -56,6 +58,14 @@ func main() {
 		// on the viewport/textarea before any WindowSizeMsg fires.
 		model.width = 120
 		model.height = 30
+		// Wire up the LSP bridge so d/R/K actually round-trip in
+		// tests. Powernap reads from PATH, so a test fixture that
+		// drops fakegopls as `gopls` (or any other server) makes
+		// the file viewer's LSP keys go live.
+		lspMgr := pinkylsp.New(model.fileRoot)
+		model.lsp = lspMgr
+		model.lsphub = pinkylsp.NewBridge(lspMgr)
+		_ = context.Background // reserved for any cancellation LSP requests
 	} else {
 		agents, err := session.ListAgents()
 		if err != nil {
