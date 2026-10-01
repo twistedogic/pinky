@@ -2537,7 +2537,7 @@ func (m *model) headerView() string {
 // (" Files ").
 func (m *model) tabHeader() string {
 	if m.tab == tabFiles {
-		return activeTabStyle.Render("Files") + " " + inactiveTabStyle.Render("Message")
+		return inactiveTabStyle.Render("Message") + " " + activeTabStyle.Render("Files")
 	}
 	return activeTabStyle.Render("Message") + " " + inactiveTabStyle.Render("Files")
 }

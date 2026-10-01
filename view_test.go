@@ -282,6 +282,38 @@ func TestTabHeader_ActiveCellSwapsWithMTab(t *testing.T) {
 	}
 }
 
+// TestTabHeader_FixedCellOrder: the row renders "Message" before
+// "Files" regardless of which tab is active. Regression for the bug
+// where tabHeader() built the row active-first and visually swapped
+// the cells when m.tab == tabFiles.
+func TestTabHeader_FixedCellOrder(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		tab  tab
+	}{
+		{"tabMessage", tabMessage},
+		{"tabFiles", tabFiles},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := newIdleModelForKeymap(t)
+			m.tab = c.tab
+			m.reflow()
+			stripped := ansi.Strip(tabHeaderFirstLine(t, m))
+			msgIdx := strings.Index(stripped, "Message")
+			filesIdx := strings.Index(stripped, "Files")
+			if msgIdx < 0 {
+				t.Fatalf("row missing 'Message'; got %q", stripped)
+			}
+			if filesIdx < 0 {
+				t.Fatalf("row missing 'Files'; got %q", stripped)
+			}
+			if msgIdx >= filesIdx {
+				t.Errorf("'Message' must appear before 'Files' regardless of active tab; got %q", stripped)
+			}
+		})
+	}
+}
+
 // TestTabHeader_FoldsIntoHeaderHeight: headerHeight accounts for
 // the tab row on top of the (1- or 2-line) cwd header.
 func TestTabHeader_FoldsIntoHeaderHeight(t *testing.T) {
