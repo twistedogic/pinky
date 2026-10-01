@@ -247,18 +247,3 @@ func runeAdvance(s string, bytePos int) int {
 	_, sz := utf8.DecodeRuneInString(s[bytePos:])
 	return bytePos + sz
 }
-
-// NavLineIndex maps a (lineIdx, charPos) cursor to the rendered line
-// index inside the concatenated viewport. wrappedToSrc[yOffset]
-// gives the source-line index for each viewport line; the byte
-// within the source line maps to one of the wrapped sub-lines.
-//
-// This helper is the post-wrap projection; the byteToLineInBlock
-// helper for the old block model is gone — wrapping is now a
-// per-source-line concern (see LineGutter).
-func NavLineIndex(sourceToFirst []int, c NavCursor) int {
-	if c.LineIdx < 0 || c.LineIdx >= len(sourceToFirst) {
-		return 0
-	}
-	return sourceToFirst[c.LineIdx]
-}

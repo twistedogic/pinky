@@ -2090,9 +2090,6 @@ func (m model) FullHelp() [][]key.Binding {
 	return nil
 }
 
-// placeholderStyle is the dim style for the empty-state line.
-var placeholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
-
 // statusBarStyle paints the bottom status line as a full-width bar so
 // pinky visually anchors to the terminal edges instead of leaving
 // whitespace on the right.
@@ -2135,6 +2132,16 @@ var (
 // statusBarStyle foreground so the dim palette stays consistent.
 var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
+// headerStyle / selectedStyle / normalStyle are the recurring
+// row-render trio: bold magenta for the section header, bold
+// green for the focused row, plain grey for the rest. Reused by
+// the dir navigator, the LSP picker, and the agent-session picker.
+var (
+	headerStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	normalStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+)
+
 // pendingIdleStyle / pendingArmedStyle paint the header's right
 // pending-comment count. Yellow always (zero still visible), bold
 // when > 0 to flag "unsent stuff waiting".
@@ -2155,7 +2162,7 @@ func (m *model) refreshViewport() {
 		m.lineStartOffsets = nil
 		m.wrappedToSrc = nil
 		m.sourceToFirst = nil
-		m.viewport.SetContent(placeholderStyle.Render(placeholderText))
+		m.viewport.SetContent(dimStyle.Italic(true).Render(placeholderText))
 		return
 	}
 	// ponytail: word-wrap to fit the viewport before the gutter is
@@ -2200,9 +2207,8 @@ func (m *model) refreshViewport() {
 }
 
 // wrappedYOffsetToSource translates a viewport YOffset (in wrapped
-// lines) back to the underlying markdown source-line index that
-// CurrentBlockIdx / NavLineIndex expect. Returns 0 when the
-// viewport is empty / no wrap map.
+// lines) back to the underlying source-line index. Returns 0 when
+// the viewport is empty / no wrap map.
 func (m *model) wrappedYOffsetToSource(y int) int {
 	if len(m.wrappedToSrc) == 0 {
 		return 0
@@ -2467,10 +2473,6 @@ func (m model) errorView() string {
 // per depth level, a collapse marker (▾ expanded, ▸ collapsed)
 // for directories, and a cyan ▍ on the cursor's row.
 func (m model) fileNavView() string {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true)
 
 	visible := m.visibleFileEntries()
@@ -2522,7 +2524,6 @@ func (m model) fileNavView() string {
 // selection range.
 func (m model) renderFileContent() string {
 	if len(m.fileViewer.lines) == 0 {
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 		return dimStyle.Render("(empty file)")
 	}
 	const yellow = "\x1b[38;5;228m"
@@ -2548,23 +2549,11 @@ func (m model) renderFileContent() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// applyCursor / spliceInvert were lifted to the render package
-// (render.ApplyCursor, render.SpliceInvert). The file viewer's
-// call site uses render.ApplyCursor above. The cursorInvertOn /
-// cursorInvertOff constants remain here for the file viewer's
-// trailing-space cursor (kept inlined at the call site).
-
-const (
-	cursorInvertOn  = "\x1b[7m"
-	cursorInvertOff = "\x1b[27m"
-)
-
 // fileViewView renders the file-viewer header (path + optional
 // `lines N-M of K` position indicator) followed by the file
 // viewport's visible window. The header sits outside the viewport
 // so the indicator stays visible while the body scrolls.
 func (m model) fileViewView() string {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	header := fmt.Sprintf("file — %s", m.fileViewer.path)
 	if len(m.fileViewer.lines) > m.fileViewer.viewport.Height() {
 		top := m.fileViewer.viewport.YOffset() + 1
@@ -2597,11 +2586,6 @@ func maybeHoverFooter(m model) string {
 // location with the relative path + 1-based line/col + a snippet.
 // Cyan ▶ marks the cursor; dim style for the rest.
 func (m model) lspPickerView() string {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(fmt.Sprintf("%s — %d location(s)", m.lspPicker.label, len(m.lspPicker.locations))))
 	b.WriteByte('\n')
@@ -2723,11 +2707,6 @@ func applySelection(line string, lineNo int, sel fileSelection, cursorLine, curs
 }
 
 func (m model) pickerView() string {
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-
 	var b strings.Builder
 	b.WriteString(headerStyle.Render("pinky: pick an agent session"))
 	b.WriteByte('\n')
