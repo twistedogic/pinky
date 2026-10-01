@@ -328,9 +328,21 @@ func (m *model) scrollCursorIntoView() {
 
 func newModel() model {
 	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
+	ta := textarea.New()
+	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetHeight(composeHeight)
+	cta := textarea.New()
+	cta.Placeholder = "comment — Esc cancel"
+	cta.ShowLineNumbers = false
+	cta.CharLimit = 0
+	cta.SetHeight(1)
 	return model{
 		state:    statePicking,
 		viewport: vp,
+		textarea: ta,
+		commentTa: cta,
 		help:     help.New(),
 	}
 }
@@ -481,7 +493,7 @@ func (m *model) selectAgent(idx int) error {
 }
 
 func (m model) Init() tea.Cmd {
-	if m.state == stateNav {
+	if m.state == stateNav && m.src != nil {
 		return pollCmd(m.src)
 	}
 	return nil
@@ -2208,7 +2220,7 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) reflow() {
-	if m.height == 0 {
+	if m.height == 0 || m.width == 0 {
 		return
 	}
 	vpHeight := m.height - statusHeight - m.helpHeight()

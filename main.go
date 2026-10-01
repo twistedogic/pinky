@@ -19,24 +19,54 @@ const (
 	pollInterval = 500 * time.Millisecond
 )
 
+// testMode reports whether pinky was started with PINKY_TEST=1. In
+// test mode the tmux hard prerequisite is bypassed (the test fixture
+// spawns a real tmux server at a custom socket), agent discovery is
+// skipped (the test injects its own cwd), and the model is placed
+// directly into stateNav with an empty session source so the
+// scenarios can navigate the file viewer + LSP without a backing pi/
+// codex process. Test scenarios override `sendToPane` in model.go
+// to capture outgoing inject text.
+func testMode() bool {
+	return os.Getenv("PINKY_TEST") == "1"
+}
+
 func main() {
-	// tmux is a hard prerequisite (we shell out to it constantly).
-	// If it's not running, exit before constructing any TUI state —
-	// there's no useful TUI to show.
-	if err := tmux.RequireServer(); err != nil {
-		fail(err)
+	if !testMode() {
+		// tmux is a hard prerequisite (we shell out to it constantly).
+		// If it's not running, exit before constructing any TUI state —
+		// there's no useful TUI to show.
+		if err := tmux.RequireServer(); err != nil {
+			fail(err)
+		}
 	}
 
 	model := newModel()
-	agents, err := session.ListAgents()
-	if err != nil {
-		model.err = err
-		model.state = stateError
-	} else if len(agents) == 0 {
-		model.err = errors.New("no active pi or codex agents found in any tmux pane")
-		model.state = stateError
+	if testMode() {
+		// Skip agent discovery + attach; place the model directly in
+		// stateNav. m.src stays nil; poll is gated on src == nil at
+		// the call sites (pollCmd returns nil when there's no source).
+		model.state = stateNav
+		model.pane = "%1" // fake pane id; sendToPane is test-overridden
+		model.fileRoot = os.Getenv("PINKY_TEST_CWD")
+		if model.fileRoot == "" {
+			model.fileRoot = "."
+		}
+		// Provide sane defaults so reflow() doesn't call SetWidth(0)
+		// on the viewport/textarea before any WindowSizeMsg fires.
+		model.width = 120
+		model.height = 30
 	} else {
-		model.setAgents(agents)
+		agents, err := session.ListAgents()
+		if err != nil {
+			model.err = err
+			model.state = stateError
+		} else if len(agents) == 0 {
+			model.err = errors.New("no active pi or codex agents found in any tmux pane")
+			model.state = stateError
+		} else {
+			model.setAgents(agents)
+		}
 	}
 
 	if _, err := tea.NewProgram(model).Run(); err != nil {
