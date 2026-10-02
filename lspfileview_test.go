@@ -33,14 +33,10 @@ func (f *fakeLSPManager) record(method string) {
 
 func (f *fakeLSPManager) DidOpen(_ context.Context, _, _ string) { f.record("DidOpen") }
 func (f *fakeLSPManager) DidClose(_ context.Context, _ string)  { f.record("DidClose") }
-func (f *fakeLSPManager) Dispatch(_ context.Context, _ int64, _ pinkylsp.Kind, _ string, _, _ int) {
-	f.record("Dispatch")
-}
 func (f *fakeLSPManager) ServerStatus(string) pinkylsp.ServerStatus {
 	f.record("ServerStatus")
 	return f.status
 }
-func (f *fakeLSPManager) Shutdown(_ context.Context) { f.record("Shutdown") }
 
 // fakeBridge records d / R / K keypress routing into the bridge.
 // The model layer only calls RequestDefinition / RequestReferences

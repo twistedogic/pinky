@@ -21,28 +21,15 @@ func truncate(s string, n int) string {
 }
 
 // flattenExcerpt prepares a quoted-text excerpt for the appendix:
-// internal newlines become a single space, runs of whitespace are
-// collapsed to one space, leading / trailing whitespace is trimmed.
-// The result is then truncated to excerptLimit chars (with "…") by
-// the caller.
+// internal whitespace collapses to single spaces, leading and
+// trailing whitespace is dropped. The result is then truncated to
+// excerptLimit chars (with "…") by the caller.
+//
+// ponytail: strings.Fields + Join handles every form of unicode
+// whitespace (including \n, \t, \r, NBSP, etc.) in one stdlib call,
+// so the manual loop above was both longer and narrower.
 func flattenExcerpt(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	// Collapse runs of whitespace to a single space.
-	var b strings.Builder
-	prevSpace := false
-	for _, r := range s {
-		if r == ' ' || r == '\t' {
-			if !prevSpace {
-				b.WriteByte(' ')
-				prevSpace = true
-			}
-			continue
-		}
-		prevSpace = false
-		b.WriteRune(r)
-	}
-	return strings.TrimSpace(b.String())
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // FormatCommentsAppendix builds the appendix body string for a set of

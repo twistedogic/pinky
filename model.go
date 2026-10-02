@@ -84,7 +84,6 @@ const (
 // the anchor line, CharA is the byte offset into that line.
 type fileSelection struct {
 	Active bool
-	Mode   byte // 'c' for char visual (v0 only)
 	LineA  int
 	CharA  int
 }
@@ -125,9 +124,7 @@ type hoverModalState struct {
 type lspManager interface {
 	DidOpen(ctx context.Context, path, content string)
 	DidClose(ctx context.Context, path string)
-	Dispatch(ctx context.Context, id int64, kind pinkylsp.Kind, path string, line, char int)
 	ServerStatus(path string) pinkylsp.ServerStatus
-	Shutdown(ctx context.Context)
 }
 
 // lspBridge is the slice of *pinkylsp.Bridge the model layer
@@ -326,8 +323,12 @@ func (m *model) scrollCursorIntoView() {
 	m.viewport.SetYOffset(off)
 }
 
-func newModel() model {
-	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
+// newComposeTextareas builds the two textareas the model carries:
+// a redirect composer (full-height) and a comment composer
+// (single-line). Used by both newModel (state at startup) and
+// idle (state at attach). ponytail: extracts a duplicated 9-line
+// construction that drifted independently.
+func newComposeTextareas() (textarea.Model, textarea.Model) {
 	ta := textarea.New()
 	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
 	ta.ShowLineNumbers = false
@@ -338,12 +339,18 @@ func newModel() model {
 	cta.ShowLineNumbers = false
 	cta.CharLimit = 0
 	cta.SetHeight(1)
+	return ta, cta
+}
+
+func newModel() model {
+	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
+	ta, cta := newComposeTextareas()
 	return model{
-		state:    statePicking,
-		viewport: vp,
-		textarea: ta,
+		state:     statePicking,
+		viewport:  vp,
+		textarea:  ta,
 		commentTa: cta,
-		help:     help.New(),
+		help:      help.New(),
 	}
 }
 
@@ -371,18 +378,7 @@ func (m *model) viewportSize() (int, int) {
 // idle binds source, history, and view state for the running pane.
 // Called by attach() after session.Open + history.Open resolve.
 func (m *model) idle(src session.Source, hist *history.History, pane string) {
-	ta := textarea.New()
-	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
-	ta.ShowLineNumbers = false
-	ta.CharLimit = 0
-	ta.SetHeight(composeHeight)
-
-	cta := textarea.New()
-	cta.Placeholder = "comment — Esc cancel"
-	cta.ShowLineNumbers = false
-	cta.CharLimit = 0
-	cta.SetHeight(1)
-
+	ta, cta := newComposeTextareas()
 	w, h := m.viewportSize()
 
 	m.pane = pane
@@ -461,7 +457,6 @@ func (m *model) persistTodos() {
 		return
 	}
 	if err := todo.Save(m.todoPath, m.todos); err != nil {
-		// Surface via placeholder (TODO: wired in render).
 		_ = err
 	}
 }
@@ -620,7 +615,7 @@ func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd
 	if msg.Err != nil {
 		return m, nil
 	}
-	label := kindLabels[msg.Kind]
+	label := lspPickerLabels[msg.Kind]
 	switch len(msg.Locations) {
 	case 0:
 		return m, nil
@@ -654,9 +649,11 @@ func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd
 	}
 }
 
-// kindLabel maps an LSP Kind to the picker header label. Indexed
-// by Kind (KindDefinition=0, KindReferences=1, KindHover=2).
-var kindLabels = [...]string{"definition", "references", ""}
+// lspPickerLabels maps an LSP picker Kind to the header label.
+// Indexed by (Kind - 1) since KindHover (2) never reaches the
+// picker (hover routes to HoverMsg). Definition=0 → index 0;
+// References=1 → index 1.
+var lspPickerLabels = [...]string{"definition", "references"}
 
 // handleHoverMsg opens the hover modal with the resolved content.
 // Empty / errored / server-missing replies stay silent (missing-
@@ -1551,7 +1548,7 @@ func (m *model) openFileViewer(path string) {
 		cursor:    1,
 		charPos:   0,
 		preferred: 0,
-		visual:    fileSelection{Mode: 'c', LineA: 1, CharA: 0},
+		visual:    fileSelection{LineA: 1, CharA: 0},
 		lineIndex: lineIndex,
 		viewport:  viewport.New(viewport.WithWidth(w), viewport.WithHeight(h)),
 	}
@@ -1643,7 +1640,6 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.fileViewer.visual.Active {
 			// anchor at the current cursor; the moving end is the
 			// cursor itself, so nothing else needs to be seeded.
-			m.fileViewer.visual.Mode = 'c'
 			m.fileViewer.visual.LineA = m.fileViewer.cursor
 			m.fileViewer.visual.CharA = m.fileViewer.charPos
 		}
@@ -2514,13 +2510,6 @@ var hoverModalBoxStyle = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(lipgloss.Color("51")).
 	Padding(0, 1)
-
-// hoverModalBodyStyle is the inner-body style: cyan italic, same
-// colour as the old hover footer so the pop-up reads as a
-// continuation of the existing accent.
-var hoverModalBodyStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("51")).
-	Italic(true)
 
 // hoverModalKeyMap restricts the modal's viewport to scroll keys
 // only. The viewport's default KeyMap binds h/l/b/f/space/etc.
