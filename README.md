@@ -36,10 +36,16 @@ back into the agent's input.
 ## Requirements
 
 - Go 1.22+ (built against 1.26.4)
-- `tmux` 3.0+ on `PATH`
+- `tmux` 3.0+ on `PATH` (only needed to attach to an agent pane)
 - `lsof` on `PATH` (used for both pi and codex session discovery when
   `PI_SESSION_FILE` is not in the process env)
 - An agent process running in the target pane: **`pi`** or **`codex`**. Other agents error out at startup.
+
+When tmux is not running, or no pane has an agent, pinky still starts:
+it opens directly in the file navigator for the current working
+directory (file review, todos, and LSP work; agent message capture
+and injection are disabled until pinky is restarted inside tmux
+with an agent pane).
 
 ## Troubleshooting
 

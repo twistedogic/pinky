@@ -413,6 +413,28 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	}
 }
 
+// standalone drops pinky into the cwd file navigator when there is
+// no tmux server or no pane running an agent. No session source is
+// bound: polling stays off (src == nil) and the message tab shows
+// its "waiting for agent…" placeholder. File review, todos, and LSP
+// work as usual; restart pinky inside tmux to attach an agent.
+func (m *model) standalone() {
+	cwd, err := os.Getwd()
+	if err != nil {
+		m.err = fmt.Errorf("locate cwd: %w", err)
+		m.state = stateError
+		return
+	}
+	m.fileRoot = cwd
+	m.todoPath = todoStoragePath(cwd)
+	m.refreshTodos()
+	mgr := pinkylsp.New(cwd)
+	m.lsp = mgr
+	m.lsphub = pinkylsp.NewBridge(mgr)
+	m.tab = tabFiles
+	m.enterFileNav()
+}
+
 // attach opens a session source + history for the given pane, then
 // hands off to idle(). Seeds the viewport via refreshViewport so the
 // placeholder renders immediately.

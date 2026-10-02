@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -34,15 +33,6 @@ func testMode() bool {
 }
 
 func main() {
-	if !testMode() {
-		// tmux is a hard prerequisite (we shell out to it constantly).
-		// If it's not running, exit before constructing any TUI state —
-		// there's no useful TUI to show.
-		if err := tmux.RequireServer(); err != nil {
-			fail(err)
-		}
-	}
-
 	model := newModel()
 	if testMode() {
 		// Skip agent discovery + attach; place the model directly in
@@ -66,15 +56,20 @@ func main() {
 		model.lsp = lspMgr
 		model.lsphub = pinkylsp.NewBridge(lspMgr)
 		_ = context.Background // reserved for any cancellation LSP requests
+	} else if err := tmux.RequireServer(); err != nil {
+		// No tmux server: no agent pane can exist. Fall back to the
+		// cwd file navigator instead of refusing to start.
+		model.standalone()
 	} else {
 		agents, err := session.ListAgents()
-		if err != nil {
+		switch {
+		case err != nil:
 			model.err = err
 			model.state = stateError
-		} else if len(agents) == 0 {
-			model.err = errors.New("no active pi or codex agents found in any tmux pane")
-			model.state = stateError
-		} else {
+		case len(agents) == 0:
+			// No agent pane either: same standalone fallback.
+			model.standalone()
+		default:
 			model.setAgents(agents)
 		}
 	}
@@ -85,8 +80,7 @@ func main() {
 }
 
 // fail prints to stderr and exits. Used only for unrecoverable startup
-// errors where no TUI can render (tmux not running, bubbletea itself
-// failing to start).
+// errors where no TUI can render (bubbletea itself failing to start).
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "pinky:", err)
 	os.Exit(1)

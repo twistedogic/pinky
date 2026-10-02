@@ -17,7 +17,11 @@ The system SHALL start by enumerating all tmux panes whose process tree contains
 
 #### Scenario: No agent sessions found
 - **WHEN** pinky starts and no tmux pane contains a pi or codex agent
-- **THEN** pinky SHALL exit with a clear error: "no active pi or codex agents found in any tmux pane"
+- **THEN** pinky SHALL NOT exit; it SHALL start in the file navigator tab rooted at the current working directory (standalone mode: no session source bound, message polling off, file review / todos / LSP fully usable)
+
+#### Scenario: No tmux server
+- **WHEN** pinky starts outside tmux (`$TMUX` unset)
+- **THEN** pinky SHALL start in the same standalone file-navigator mode instead of erroring out
 
 #### Scenario: Picker navigation
 - **WHEN** the picker is shown
