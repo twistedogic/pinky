@@ -18,6 +18,23 @@ tasks:
     cmds:
       - go test ./...
 
+  integration:build:
+    desc: Build pinky and the fakegopls LSP fixture
+    cmds:
+      - go build {{.GOFLAGS}} -o pinky .
+      - go build {{.GOFLAGS}} -o fakegopls ./tests/integration/cmd/fakegopls
+
+  integration:
+    desc: Run scenario-based LSP integration tests (Path C)
+    deps: [integration:build]
+    cmds:
+      # PINKY_TEST=1 activates the seam that bypasses the tmux
+      # requirement. The dep task drops pinky + fakegopls at
+      # the repo root, which is the default path each test resolves.
+      - cmd: go test -tags=integration -count=1 -timeout=60s ./tests/integration/...
+        env:
+          PINKY_TEST: "1"
+
   vet:
     desc: Run go vet
     cmds:
