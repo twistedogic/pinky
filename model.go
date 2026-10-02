@@ -1630,10 +1630,11 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case isKeyRune(msg, 'q'):
-		// ponytail: quit is a hard exit; no didClose round-trip
-		// (the process is going down). Powernap's Kill handles
-		// the wire side.
-		return m, tea.Quit
+		// q returns to the file navigator (stateFileNav) — same
+		// surface as Esc. Hard quit is reserved for the picker /
+		// picker-tabs where there's nothing to pop out of.
+		m.exitFileViewer()
+		return m, nil
 	case isKeyRune(msg, 's'):
 		m.handleSend()
 		return m, nil
