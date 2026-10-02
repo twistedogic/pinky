@@ -27,6 +27,15 @@ import (
 )
 
 type Position struct {
+	Line      int `json:"line"`
+	Character int `json:"character"`
+}
+
+// refConfig is the (line, col) shape used by FAKE_LSP_REFS env
+// (the user's test fixture). Kept distinct from Position so the
+// env fixture stays readable as "line, col" rather than leaking
+// the protocol's "character" naming.
+type refConfig struct {
 	Line int `json:"line"`
 	Col  int `json:"col"`
 }
@@ -47,7 +56,7 @@ type Def struct {
 type config struct {
 	file  string
 	defs  []Def
-	refs  []Position
+	refs  []refConfig
 	hover string
 }
 
@@ -60,11 +69,11 @@ func parseDefs(s string) []Def {
 	return out
 }
 
-func parseRefs(s string) []Position {
+func parseRefs(s string) []refConfig {
 	if s == "" {
 		return nil
 	}
-	var out []Position
+	var out []refConfig
 	_ = json.Unmarshal([]byte(s), &out)
 	return out
 }
@@ -130,12 +139,12 @@ func (c *config) handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.
 			return nil, err
 		}
 		for _, d := range c.defs {
-			if d.Query.Line == params.Position.Line && d.Query.Col == params.Position.Col {
+			if d.Query.Line == params.Position.Line && d.Query.Character == params.Position.Character {
 				return []jsonLocation{{
 					URI: d.Target.URI,
 					Range: jsonRange{
-						Start: jsonPos{Line: d.Target.Range.Start.Line, Char: d.Target.Range.Start.Col},
-						End:   jsonPos{Line: d.Target.Range.End.Line, Char: d.Target.Range.End.Col},
+						Start: jsonPos{Line: d.Target.Range.Start.Line, Char: d.Target.Range.Start.Character},
+						End:   jsonPos{Line: d.Target.Range.End.Line, Char: d.Target.Range.End.Character},
 					},
 				}}, nil
 			}
