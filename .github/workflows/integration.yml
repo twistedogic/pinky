@@ -77,8 +77,12 @@ jobs:
       - name: Build pinky
         run: go build -o pinky .
 
+      - name: Build fakegopls (LSP fixture the test renames to `gopls` on PATH)
+        run: go build -o fakegopls ./tests/integration/cmd/fakegopls
+
       - name: Run integration tests
         env:
           PINKY_TEST: "1"
           PINKY_TEST_PINKY: ${{ github.workspace }}/pinky
-        run: go test -tags=integration ./tests/integration/...
+          FAKE_FBINARY: ${{ github.workspace }}/fakegopls
+        run: go test -tags=integration -count=1 -timeout=60s ./tests/integration/...
