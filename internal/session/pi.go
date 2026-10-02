@@ -89,7 +89,7 @@ func piSessionFile(pid int) (string, error) {
 	if os.Getenv("PINKY_DEBUG") != "" {
 		debugLogf("lsof -p %d (raw):\n%s", pid, strings.ReplaceAll(string(out), "\n", "\n    "))
 	}
-	got := parseLsofJSONL(string(out))
+	got := parseLsofJSONL(string(out), "")
 	if got == "" {
 		return "", fmt.Errorf("no .jsonl session file open (PI_SESSION_FILE not set and no .jsonl file is open)")
 	}
@@ -99,14 +99,15 @@ func piSessionFile(pid int) (string, error) {
 	return got, nil
 }
 
-// parseLsofJSONL extracts the most recently modified .jsonl file path
-// from `lsof -F n` output. Lines not starting with `n` are skipped.
-// The `n` prefix is stripped; the rest is taken as the path. Files
+// parseLsofJSONL extracts the most recently modified .jsonl file
+// path from `lsof -F n` output, optionally restricted to paths
+// under `root` (empty string means no restriction). Lines not
+// starting with `n` are skipped; the `n` prefix is stripped; files
 // that don't exist on disk are skipped.
 //
 // Exposed at package scope so tests can drive the parser without
 // spawning real processes.
-func parseLsofJSONL(lsofOut string) string {
+func parseLsofJSONL(lsofOut, root string) string {
 	var best string
 	var bestMod time.Time
 	sc := bufio.NewScanner(strings.NewReader(lsofOut))
@@ -121,6 +122,9 @@ func parseLsofJSONL(lsofOut string) string {
 		}
 		if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, string(filepath.Separator)) {
 			// Defensive: skip relative paths that lsof shouldn't emit.
+			continue
+		}
+		if root != "" && !strings.HasPrefix(path, root) {
 			continue
 		}
 		fi, err := os.Stat(path)

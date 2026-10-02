@@ -42,7 +42,7 @@ func TestParseLsofJSONL(t *testing.T) {
 		"n" + newer + "\n" +
 		"n" + filepath.Join(dir, "subdir", "nested.jsonl") + "\n" // doesn't exist
 
-	got := parseLsofJSONL(in)
+	got := parseLsofJSONL(in, "")
 	if got != newer {
 		t.Errorf("parseLsofJSONL = %q want %q (most recent .jsonl)", got, newer)
 	}
@@ -50,13 +50,13 @@ func TestParseLsofJSONL(t *testing.T) {
 
 func TestParseLsofJSONL_NoJSONL(t *testing.T) {
 	in := "n" + "/tmp/foo.txt" + "\n" + "n" + "/tmp/bar.md" + "\n"
-	if got := parseLsofJSONL(in); got != "" {
+	if got := parseLsofJSONL(in, ""); got != "" {
 		t.Errorf("parseLsofJSONL = %q want empty", got)
 	}
 }
 
 func TestParseLsofJSONL_Empty(t *testing.T) {
-	if got := parseLsofJSONL(""); got != "" {
+	if got := parseLsofJSONL("", ""); got != "" {
 		t.Errorf("parseLsofJSONL = %q want empty", got)
 	}
 }

@@ -23,21 +23,13 @@ import (
 // the next query retries the lookup. Spec D6.
 const unavailableWindow = 30 * time.Second
 
-// clientState is the high-level lifecycle of one server.
-type clientState int
-
-const (
-	stateStarting clientState = iota
-	stateReady
-	stateError
-	stateDisabled
-)
-
 // clientEntry is one spawned language server plus the metadata
-// the Manager needs to gate requests.
+// the Manager needs to gate requests. State uses ServerState
+// directly so ServerStatus doesn't have to translate a parallel
+// enum.
 type clientEntry struct {
 	client *powernap.Client
-	state  clientState
+	state  ServerState
 	err    error
 }
 
@@ -162,7 +154,6 @@ func canonicalServer(ext string) []string {
 }
 
 func hasFiletype(s *pconfig.ServerConfig, ext string) bool {
-	ext = strings.ToLower(strings.TrimPrefix(ext, "."))
 	for _, ft := range s.FileTypes {
 		if strings.EqualFold(strings.TrimPrefix(ft, "."), ext) {
 			return true
@@ -199,7 +190,7 @@ func installHint(server string) string {
 // in the entry's state; the Manager surfaces them to the model
 // via ErrServerMissing / generic error replies.
 func (m *Manager) startServer(ctx context.Context, langID, command string) *clientEntry {
-	entry := &clientEntry{state: stateStarting}
+	entry := &clientEntry{state: ServerStarting}
 	m.clients[langID] = entry
 
 	rootURI := "file://" + m.workDir
@@ -212,12 +203,12 @@ func (m *Manager) startServer(ctx context.Context, langID, command string) *clie
 		// exec.LookPath failure shows up here as a wrapped
 		// *fs.PathError or *exec.Error.
 		if isMissingBinary(err) {
-			entry.state = stateDisabled
+			entry.state = ServerMissing
 			entry.err = &ErrServerMissing{Server: command, Hint: installHint(command)}
 			m.unavailable[langID] = time.Now().Add(unavailableWindow)
 			return entry
 		}
-		entry.state = stateError
+		entry.state = ServerError
 		entry.err = err
 		return entry
 	}
@@ -235,13 +226,13 @@ func (m *Manager) startServer(ctx context.Context, langID, command string) *clie
 	})
 
 	if err := client.Initialize(ctx, false); err != nil {
-		entry.state = stateError
+		entry.state = ServerError
 		entry.err = err
 		client.Kill()
 		return entry
 	}
 	entry.client = client
-	entry.state = stateReady
+	entry.state = ServerReady
 	return entry
 }
 
@@ -284,7 +275,7 @@ func (m *Manager) ensureServer(ctx context.Context, path string) (*clientEntry, 
 		}
 		delete(m.unavailable, langID)
 	}
-	if entry, ok := m.clients[langID]; ok && entry.state == stateReady {
+	if entry, ok := m.clients[langID]; ok && entry.state == ServerReady {
 		m.mu.Unlock()
 		return entry, langID, nil
 	}
@@ -294,14 +285,11 @@ func (m *Manager) ensureServer(ctx context.Context, path string) (*clientEntry, 
 	defer m.mu.Unlock()
 	// Re-check after re-acquiring (another goroutine may have
 	// raced us to spawn it).
-	if entry, ok := m.clients[langID]; ok && entry.state == stateReady {
+	if entry, ok := m.clients[langID]; ok && entry.state == ServerReady {
 		return entry, langID, nil
 	}
 	entry := m.startServer(ctx, langID, command)
-	if entry.state == stateDisabled {
-		return nil, langID, entry.err
-	}
-	if entry.state == stateError {
+	if entry.state != ServerReady {
 		return nil, langID, entry.err
 	}
 	return entry, langID, nil
@@ -323,20 +311,7 @@ func (m *Manager) ServerStatus(path string) ServerStatus {
 		return ServerStatus{LangID: langID, Command: command, State: ServerMissing}
 	}
 	if entry, ok := m.clients[langID]; ok {
-		switch entry.state {
-		case stateReady:
-			return ServerStatus{LangID: langID, Command: command, State: ServerReady}
-		case stateStarting:
-			return ServerStatus{LangID: langID, Command: command, State: ServerStarting}
-		case stateDisabled:
-			// ponytail: treat "previously disabled this window"
-			// as missing too — startServer re-arms unavailable on
-			// disable, so an entry here means the binary still
-			// can't be found.
-			return ServerStatus{LangID: langID, Command: command, State: ServerMissing}
-		case stateError:
-			return ServerStatus{LangID: langID, Command: command, State: ServerError}
-		}
+		return ServerStatus{LangID: langID, Command: command, State: entry.state}
 	}
 	return ServerStatus{LangID: langID, Command: command, State: ServerStarting}
 }
@@ -360,7 +335,7 @@ func uriForPath(p string) string {
 // or when the server is currently unavailable.
 func (m *Manager) DidOpen(ctx context.Context, path, content string) {
 	entry, _, err := m.ensureServer(ctx, path)
-	if err != nil || entry == nil || entry.state != stateReady || entry.client == nil {
+	if err != nil || entry == nil || entry.state != ServerReady || entry.client == nil {
 		return
 	}
 	lang := string(powernap.DetectLanguage(path))
@@ -371,7 +346,7 @@ func (m *Manager) DidOpen(ctx context.Context, path, content string) {
 // no server is running for the language.
 func (m *Manager) DidClose(ctx context.Context, path string) {
 	entry, _, err := m.ensureServer(ctx, path)
-	if err != nil || entry == nil || entry.state != stateReady || entry.client == nil {
+	if err != nil || entry == nil || entry.state != ServerReady || entry.client == nil {
 		return
 	}
 	_ = entry.client.NotifyDidCloseTextDocument(ctx, uriForPath(path))

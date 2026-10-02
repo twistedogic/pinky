@@ -60,37 +60,14 @@ func codexSessionFile(pid int) (string, error) {
 		return "", homeErr
 	}
 	sessionsRoot := filepath.Join(home, "sessions")
-	var best string
-	var bestMod time.Time
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := sc.Text()
-		path, ok := strings.CutPrefix(line, "n")
-		if !ok {
-			continue
-		}
-		if !strings.HasSuffix(path, ".jsonl") {
-			continue
-		}
-		if !strings.HasPrefix(path, sessionsRoot) {
-			continue
-		}
-		fi, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if best == "" || fi.ModTime().After(bestMod) {
-			best = path
-			bestMod = fi.ModTime()
-		}
-	}
-	if best == "" {
+	got := parseLsofJSONL(string(out), sessionsRoot)
+	if got == "" {
 		return "", fmt.Errorf("no codex session file open for pid %d (looked under %s)\n\n"+
 			"troubleshooting:\n"+
 			"  - check open files: lsof -p %d | grep jsonl",
 			pid, sessionsRoot, pid)
 	}
-	return best, nil
+	return got, nil
 }
 
 // codexByCwd finds the newest codex session JSONL via the cwd-based

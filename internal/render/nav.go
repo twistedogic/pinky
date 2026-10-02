@@ -178,7 +178,7 @@ func preferredCharPos(line string, preferred int) int {
 	if clamped > len(line) {
 		clamped = len(line)
 	}
-	return snapLeft(line, clamped)
+	return SnapToRuneStart(line, clamped)
 }
 
 // byteOffset returns the global byte offset of (lineIdx, charPos) in
@@ -197,25 +197,26 @@ func byteOffset(lineStartOffsets []int, lineIdx, charPos int) int {
 	return lineStartOffsets[lineIdx] + charPos
 }
 
-// snapLeft returns bytePos snapped to the start of the rune that
-// contains bytePos. If bytePos falls mid-rune, returns the start of
-// the rune preceding bytePos. Used by `j`/`k` to keep CharPos on a
-// valid rune boundary after clamping.
-func snapLeft(s string, bytePos int) int {
+// SnapToRuneStart returns bytePos snapped to the start of the rune
+// that contains bytePos. When bytePos falls inside a rune
+// (UTF-8 continuation byte, high bits 10xxxxxx), walks back to
+// the start of the preceding rune. The 0xC0 mask is more robust
+// than utf8.DecodeRuneInString on partial mid-rune bytes
+// (DecodeRuneInString returns RuneError with sz=0 mid-rune, which
+// makes that path unsafe). Shared by the message nav state
+// machine and the file viewer's motion handlers.
+func SnapToRuneStart(s string, bytePos int) int {
+	n := len(s)
 	if bytePos <= 0 {
 		return 0
 	}
-	if bytePos >= len(s) {
-		return len(s)
+	if bytePos >= n {
+		return n
 	}
-	for bytePos > 0 {
-		_, sz := utf8.DecodeRuneInString(s[bytePos:])
-		if bytePos+sz <= len(s) {
-			return bytePos
-		}
+	for bytePos > 0 && s[bytePos]&0xC0 == 0x80 {
 		bytePos--
 	}
-	return 0
+	return bytePos
 }
 
 // runeStart returns the start of the rune that ENDS at bytePos-1

@@ -33,8 +33,6 @@ import (
 const (
 	composeHeight = 4
 	statusHeight  = 1
-
-	placeholderText = "waiting for agent…"
 )
 
 type state int
@@ -122,7 +120,8 @@ type hoverModalState struct {
 
 // lspManager is the slice of *pinkylsp.Manager the model layer
 // uses. Declared as an interface so unit tests can substitute a
-// fake without spawning gopls.
+// fake without spawning gopls (and without exercising the real
+// ServerStatus dispatch on every render).
 type lspManager interface {
 	DidOpen(ctx context.Context, path, content string)
 	DidClose(ctx context.Context, path string)
@@ -476,8 +475,7 @@ func todoStoragePath(cwd string) string {
 }
 
 // todoHomeDir is the root under which per-workspace todo files
-// live. Default is ~/.local/share/pinky; tests override via
-// todoHomeDirOverride.
+// live. Default is ~/.local/share/pinky; tests override HOME.
 func todoHomeDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -510,14 +508,24 @@ func pollCmd(src session.Source) tea.Cmd {
 	})
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if r := recover(); r != nil {
-		fmt.Fprintf(os.Stderr,
-			"pinky: panic in Update (state=%d, file=%q, cursor=%d/%d): %v\n%s\n",
-			m.state, m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
-			r, debug.Stack())
-		panic(r)
+// recoverPanic logs a model-state snapshot to make postmortems easier,
+// then re-panics. Used at every Update entry point that touches the
+// file viewer (the most panic-prone surface: cursor math, line
+// slicing, visual-mode rendering).
+func (m *model) recoverPanic(where string, extra ...any) {
+	r := recover()
+	if r == nil {
+		return
 	}
+	fmt.Fprintf(os.Stderr,
+		"pinky: panic in %s (state=%d, file=%q, cursor=%d/%d): %v\n%v\n%s\n",
+		where, m.state, m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
+		r, extra, debug.Stack())
+	panic(r)
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.recoverPanic("Update")
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -620,7 +628,7 @@ func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd
 		// Definition-on-one-result jumps; references-on-one-result
 		// still goes through the picker so the user sees the
 		// single row (matches D5's "always picker" rule).
-		if label == "definition" {
+		if msg.Kind == pinkylsp.KindDefinition {
 			m.jumpToLocation(msg.Locations[0])
 			return m, nil
 		}
@@ -1513,7 +1521,7 @@ func (m *model) openFileViewer(path string) {
 		return
 	}
 	content := string(data)
-	m.fileViewer.lineIndex = render.MarkLines(content, m.fileCommentsFor(path))
+	lineIndex := render.MarkLines(content, m.fileCommentsFor(path))
 	w, h := m.viewportSize()
 	h-- // ponytail: one line for the file-viewer header above the viewport.
 	if h < 1 {
@@ -1527,7 +1535,7 @@ func (m *model) openFileViewer(path string) {
 		charPos:   0,
 		preferred: 0,
 		visual:    fileSelection{Mode: 'c', LineA: 1, CharA: 0},
-		lineIndex: render.MarkLines(content, m.fileCommentsFor(path)),
+		lineIndex: lineIndex,
 		viewport:  viewport.New(viewport.WithWidth(w), viewport.WithHeight(h)),
 	}
 	m.state = stateFileView
@@ -1559,14 +1567,8 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 // c opens the comment composer, s flushes, d/R/K fire LSP
 // queries, Esc returns to dir nav, Tab returns to message tab.
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if r := recover(); r != nil {
-		fmt.Fprintf(os.Stderr,
-			"pinky: panic in handleFileViewKey (file=%q, cursor=%d/%d, lines=%d, visual=%v): %v\n%s\n",
-			m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
-			len(m.fileViewer.lines), m.fileViewer.visual.Active, r,
-			debug.Stack())
-		panic(r)
-	}
+	m.recoverPanic("handleFileViewKey",
+		len(m.fileViewer.lines), m.fileViewer.visual.Active)
 	// Hover modal: scroll keys route to the modal's viewport so
 	// long go-doc hovers stay readable; everything else dismisses
 	// and falls through to the normal handler (so `d` after `K`
@@ -1867,25 +1869,10 @@ func (m *model) dismissLSPPicker() {
 }
 
 // clampToRuneBoundary returns the byte offset of the start of
-// the rune containing pos. When pos is already on a rune start
-// (or pos == 0 or pos == len(line)), pos is returned unchanged.
-// When pos falls inside a rune (high bits 10xxxxxx), walks
-// backwards to that rune's start. Centralising the math means
+// the rune containing pos. Centralised in render.SnapToRuneStart;
 // every motion and renderer can share one rune-aligned contract.
 func clampToRuneBoundary(line string, pos int) int {
-	n := len(line)
-	if pos <= 0 {
-		return 0
-	}
-	if pos >= n {
-		return n
-	}
-	// Walk back until we find a byte that is not a UTF-8
-	// continuation byte (0b10xxxxxx).
-	for pos > 0 && line[pos]&0xC0 == 0x80 {
-		pos--
-	}
-	return pos
+	return render.SnapToRuneStart(line, pos)
 }
 
 // fileViewMoveLine moves the cursor line by delta. The on-screen
@@ -2530,7 +2517,7 @@ func (m *model) refreshViewport() {
 		m.lineStartOffsets = nil
 		m.wrappedToSrc = nil
 		m.sourceToFirst = nil
-		m.viewport.SetContent(dimStyle.Italic(true).Render(placeholderText))
+		m.viewport.SetContent(dimStyle.Italic(true).Render("waiting for agent…"))
 		return
 	}
 	// ponytail: word-wrap to fit the viewport before the gutter is
