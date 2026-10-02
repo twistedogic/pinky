@@ -1,0 +1,84 @@
+name: integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Path A: vhs inside tmux. Opt-in (workflow_dispatch only) because vhs's
+  # own browser tests are gated behind VHS_TEST_BROWSER=1 on CI. PR-blocking
+  # tests use Path C (Go-native).
+  vhs-scenarios:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux ttyd ffmpeg
+          go install golang.org/x/tools/gopls@latest
+
+      - name: Install vhs
+        run: go install github.com/charmbracelet/vhs@latest
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build pinky
+        run: go build -o pinky .
+
+      - name: Run vhs scenario tapes
+        env:
+          # ttyd + Chrome on CI need xvfb
+          DISPLAY: :99
+        run: |
+          xvfb-run -a --server-args=--screen-width=1024 --screen-height=768 \
+            bash -c '
+              set -e
+              for tape in tests/integration/lsp-*.test.tape; do
+                echo "=== running $tape ==="
+                vhs "$tape"
+              done
+            '
+
+      - name: Upload golden diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vhs-golden
+          path: tests/integration/golden/
+          if-no-files-found: ignore
+
+  # Path C: Go-native LSP integration tests. The PR-blocking layer.
+  lsp-scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install tmux (Path C spawns a real tmux server in fixtures)
+        run: sudo apt-get install -y tmux
+
+      - name: Install gopls (used by some scenarios)
+        run: go install golang.org/x/tools/gopls@latest
+
+      - name: Build pinky
+        run: go build -o pinky .
+
+      - name: Run integration tests
+        env:
+          PINKY_TEST: "1"
+          PINKY_TEST_PINKY: ${{ github.workspace }}/pinky
+        run: go test -tags=integration ./tests/integration/...
