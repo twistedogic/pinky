@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -328,9 +329,21 @@ func (m *model) scrollCursorIntoView() {
 
 func newModel() model {
 	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
+	ta := textarea.New()
+	ta.Placeholder = "redirect — Enter newline, Ctrl+S send, Esc cancel"
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetHeight(composeHeight)
+	cta := textarea.New()
+	cta.Placeholder = "comment — Esc cancel"
+	cta.ShowLineNumbers = false
+	cta.CharLimit = 0
+	cta.SetHeight(1)
 	return model{
 		state:    statePicking,
 		viewport: vp,
+		textarea: ta,
+		commentTa: cta,
 		help:     help.New(),
 	}
 }
@@ -481,7 +494,7 @@ func (m *model) selectAgent(idx int) error {
 }
 
 func (m model) Init() tea.Cmd {
-	if m.state == stateNav {
+	if m.state == stateNav && m.src != nil {
 		return pollCmd(m.src)
 	}
 	return nil
@@ -498,6 +511,13 @@ func pollCmd(src session.Source) tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if r := recover(); r != nil {
+		fmt.Fprintf(os.Stderr,
+			"pinky: panic in Update (state=%d, file=%q, cursor=%d/%d): %v\n%s\n",
+			m.state, m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
+			r, debug.Stack())
+		panic(r)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1539,6 +1559,14 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 // c opens the comment composer, s flushes, d/R/K fire LSP
 // queries, Esc returns to dir nav, Tab returns to message tab.
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if r := recover(); r != nil {
+		fmt.Fprintf(os.Stderr,
+			"pinky: panic in handleFileViewKey (file=%q, cursor=%d/%d, lines=%d, visual=%v): %v\n%s\n",
+			m.fileViewer.path, m.fileViewer.cursor, m.fileViewer.charPos,
+			len(m.fileViewer.lines), m.fileViewer.visual.Active, r,
+			debug.Stack())
+		panic(r)
+	}
 	// Hover modal: scroll keys route to the modal's viewport so
 	// long go-doc hovers stay readable; everything else dismisses
 	// and falls through to the normal handler (so `d` after `K`
@@ -1599,15 +1627,24 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// was already dismissed by the routing block above if it
 		// was open.)
 		m.missingServerHint = ""
+		if m.lsphub == nil {
+			return m, nil
+		}
 		return m, m.requestLSP(m.lsphub.RequestDefinition)
 	case key.Matches(msg, defaultKeyMap.FileViewReferences):
 		m.missingServerHint = ""
+		if m.lsphub == nil {
+			return m, nil
+		}
 		return m, m.requestLSP(m.lsphub.RequestReferences)
 	case key.Matches(msg, defaultKeyMap.FileViewHover):
 		// K while the modal is open: the modal-routing block above
 		// already dismissed it. Fire the new query as usual; the
 		// resulting HoverMsg replaces the modal content.
 		m.missingServerHint = ""
+		if m.lsphub == nil {
+			return m, nil
+		}
 		return m, m.requestLSP(m.lsphub.RequestHover)
 	}
 
@@ -2208,7 +2245,7 @@ func (m model) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) reflow() {
-	if m.height == 0 {
+	if m.height == 0 || m.width == 0 {
 		return
 	}
 	vpHeight := m.height - statusHeight - m.helpHeight()
