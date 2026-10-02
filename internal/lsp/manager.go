@@ -374,10 +374,12 @@ func (m *Manager) Dispatch(ctx context.Context, id int64, kind Kind, path string
 	c := entry.client
 	switch kind {
 	case KindDefinition:
-		_, err := c.RequestDefinition(ctx, path, line-1, char)
+		locs, err := c.RequestDefinition(ctx, path, line-1, char)
+		res.Locations = locs
 		res.Err = err
 	case KindReferences:
-		_, err := c.FindReferences(ctx, path, line-1, char, true)
+		locs, err := c.FindReferences(ctx, path, line-1, char, true)
+		res.Locations = locs
 		res.Err = err
 	case KindHover:
 		pos := protocol.Position{Line: uint32(line - 1), Character: uint32(char)} //nolint:gosec
