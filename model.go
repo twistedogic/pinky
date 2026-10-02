@@ -107,11 +107,6 @@ type lspPickerState struct {
 // on when a HoverMsg resolves with content; the viewport holds
 // the (possibly multi-line) hover body and exposes j/k / PgUp /
 // PgDn / Ctrl-D / Ctrl-U for internal scrolling.
-//
-// ponytail: separate from hoverFooter (which used to be the
-// truncated one-line preview). The modal is the hover's primary
-// surface now; hoverFooter stays around only because
-// maybeHoverFooter and reflow() check it — and it's always empty.
 type hoverModalState struct {
 	visible  bool
 	viewport viewport.Model
@@ -286,9 +281,6 @@ type model struct {
 	help help.Model
 }
 
-// newModel returns a picker model. Callers must either call setAgents
-// (then run the picker) or call attach (skip the picker, jump to running).
-
 // cursorOnScreen returns true when the cursor's rendered line is
 // within the viewport's visible range.
 func (m *model) cursorOnScreen() bool {
@@ -342,6 +334,9 @@ func newComposeTextareas() (textarea.Model, textarea.Model) {
 	return ta, cta
 }
 
+// newModel returns a picker model. Callers must either call
+// setAgents (then run the picker), attach (skip the picker), or
+// standalone() (no tmux / agent: file navigator only).
 func newModel() model {
 	vp := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
 	ta, cta := newComposeTextareas()
@@ -637,38 +632,25 @@ func (m model) handleLocationsMsg(msg pinkylsp.LocationsMsg) (tea.Model, tea.Cmd
 	if msg.Err != nil {
 		return m, nil
 	}
-	label := lspPickerLabels[msg.Kind]
-	switch len(msg.Locations) {
-	case 0:
-		return m, nil
-	case 1:
-		// Definition-on-one-result jumps; references-on-one-result
-		// still goes through the picker so the user sees the
-		// single row (matches D5's "always picker" rule).
-		if msg.Kind == pinkylsp.KindDefinition {
-			m.jumpToLocation(msg.Locations[0])
-			return m, nil
-		}
-		m.lspPicker = lspPickerState{
-			label:     label,
-			locations: msg.Locations,
-			cursor:    0,
-			workDir:   msg.WorkDir,
-		}
-		m.state = stateLSPPicker
-		m.reflow()
-		return m, nil
-	default:
-		m.lspPicker = lspPickerState{
-			label:     label,
-			locations: msg.Locations,
-			cursor:    0,
-			workDir:   msg.WorkDir,
-		}
-		m.state = stateLSPPicker
-		m.reflow()
+	// Definition-on-one-result jumps; references-on-one-result
+	// still goes through the picker so the user sees the
+	// single row (matches D5's "always picker" rule).
+	if len(msg.Locations) == 1 && msg.Kind == pinkylsp.KindDefinition {
+		m.jumpToLocation(msg.Locations[0])
 		return m, nil
 	}
+	if len(msg.Locations) == 0 {
+		return m, nil
+	}
+	m.lspPicker = lspPickerState{
+		label:     lspPickerLabels[msg.Kind],
+		locations: msg.Locations,
+		cursor:    0,
+		workDir:   msg.WorkDir,
+	}
+	m.state = stateLSPPicker
+	m.reflow()
+	return m, nil
 }
 
 // lspPickerLabels maps an LSP picker Kind to the header label.
@@ -1002,9 +984,6 @@ func (m *model) moveFileCursor(delta int) {
 	m.fileCursor = min(max(m.fileCursor+delta, 0), n-1)
 }
 
-// enterCompose transitions to compose mode with the textarea reset
-// and focused. Shared by Ctrl+N and the `c` alias.
-
 // sendToPane is the package-level hook for the actual tmux
 // dispatch. Tests swap it to capture submit calls without a live
 // tmux. ponytail: global mutable state, scoped to tests via
@@ -1073,6 +1052,8 @@ func (m *model) submitAllComments() {
 	m.comments = nil
 	m.refreshViewport()
 }
+// enterCompose transitions to compose mode with the textarea reset
+// and focused. Reached via `n` (ActionCompose).
 func (m *model) enterCompose() {
 	m.state = stateCompose
 	m.nav = render.NavState{}
@@ -1450,30 +1431,18 @@ func (m model) handleFileNavSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyBackspace:
 		if len(m.fileSearch) > 0 {
 			m.fileSearch = m.fileSearch[:len(m.fileSearch)-1]
-			m.clampFileCursorAfterFilter()
+			m.moveFileCursor(0)
 		}
 		return m, nil
 	}
 	if kp.Mod == 0 {
 		if r, ok := singleRune(msg); ok && r != 0 {
 			m.fileSearch = append(m.fileSearch, r)
-			m.clampFileCursorAfterFilter()
+			m.moveFileCursor(0)
 			return m, nil
 		}
 	}
 	return m, nil
-}
-
-// clampFileCursorAfterFilter ensures the cursor stays within the
-// filtered list after a query change (typing can shrink the
-// list). Called from the search key handler.
-func (m *model) clampFileCursorAfterFilter() {
-	visible := m.visibleFileEntries()
-	if len(visible) == 0 {
-		m.fileCursor = 0
-		return
-	}
-	m.fileCursor = min(max(m.fileCursor, 0), len(visible)-1)
 }
 
 // fileNavCollapseOrParent implements `h`: collapse the cursor's
@@ -1789,8 +1758,6 @@ func (m model) handleLSPPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, defaultKeyMap.QuitPick):
 		return m, tea.Quit
-	case isKeyRune(msg, 'q'):
-		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -1912,13 +1879,6 @@ func (m *model) dismissLSPPicker() {
 	m.reflow()
 }
 
-// clampToRuneBoundary returns the byte offset of the start of
-// the rune containing pos. Centralised in render.SnapToRuneStart;
-// every motion and renderer can share one rune-aligned contract.
-func clampToRuneBoundary(line string, pos int) int {
-	return render.SnapToRuneStart(line, pos)
-}
-
 // fileViewMoveLine moves the cursor line by delta. The on-screen
 // charPos is `min(preferred, len(newLine))`, rune-snapped to the
 // nearest UTF-8 boundary so the cursor never lands mid-rune. The
@@ -1936,7 +1896,7 @@ func (m *model) fileViewMoveLine(delta int) {
 	// rune-aligned byte offsets; centralising here means every
 	// caller gets the same answer.
 	lineLen := len(m.fileViewer.lines[m.fileViewer.cursor-1])
-	m.fileViewer.charPos = clampToRuneBoundary(
+	m.fileViewer.charPos = render.SnapToRuneStart(
 		m.fileViewer.lines[m.fileViewer.cursor-1],
 		min(m.fileViewer.preferred, lineLen),
 	)
@@ -2101,8 +2061,6 @@ func (m *model) exitFileViewer() {
 	m.state = stateFileNav
 	m.reflow()
 }
-
-// jumpToLocation moves the cursor to loc. Same-file locations
 
 // jumpToLocation moves the cursor to loc. Same-file locations
 // only mutate cursor + charPos + scroll. Cross-file locations
@@ -2977,7 +2935,7 @@ func (m model) todoListView() string {
 	}
 	var b strings.Builder
 	for i, item := range m.todos {
-		marker := "▶"
+		marker := " "
 		box := "[ ]"
 		style := dimStyle
 		if item.Done {
@@ -2987,8 +2945,6 @@ func (m model) todoListView() string {
 		if i == m.todoCursor {
 			marker = "▶"
 			style = lipgloss.NewStyle().Bold(true)
-		} else {
-			marker = " "
 		}
 		row := fmt.Sprintf("%s %s %s", marker, box, item.Text)
 		b.WriteString(style.Render(row))

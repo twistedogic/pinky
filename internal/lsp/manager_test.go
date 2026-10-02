@@ -2,7 +2,7 @@ package lsp
 
 import (
 	"context"
-	"os"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,18 +58,6 @@ func TestInstallHint_Gopls(t *testing.T) {
 	}
 }
 
-// TestIsErrServerMissing: typed check works for *ErrServerMissing.
-func TestIsErrServerMissing(t *testing.T) {
-	if !IsErrServerMissing(&ErrServerMissing{Server: "x"}) {
-		t.Errorf("expected IsErrServerMissing=true for *ErrServerMissing")
-	}
-	if IsErrServerMissing(nil) {
-		t.Errorf("expected IsErrServerMissing=false for nil")
-	}
-	if IsErrServerMissing(os.ErrNotExist) {
-		t.Errorf("expected IsErrServerMissing=false for unrelated error")
-	}
-}
 
 // TestManager_MissingServerMarksUnavailable: ensureServer for a
 // missing-binary path returns ErrServerMissing and records the
@@ -86,7 +74,8 @@ func TestManager_MissingServerMarksUnavailable(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when gopls is missing from PATH")
 	}
-	if !IsErrServerMissing(err) {
+	var miss *ErrServerMissing
+	if !errors.As(err, &miss) {
 		t.Errorf("expected ErrServerMissing; got %v", err)
 	}
 	if entry != nil {
@@ -116,7 +105,8 @@ func TestManager_MissingServerQuietWindow(t *testing.T) {
 	// return missing (no real retry).
 	for i := 0; i < 2; i++ {
 		_, _, err := m.ensureServer(ctx, filepath.Join(dir, "x.go"))
-		if !IsErrServerMissing(err) {
+		var miss *ErrServerMissing
+		if !errors.As(err, &miss) {
 			t.Errorf("call %d: expected ErrServerMissing; got %v", i+1, err)
 		}
 	}

@@ -48,14 +48,6 @@ func (e *ErrServerMissing) Error() string {
 	return fmt.Sprintf("%s not found — install with: %s", e.Server, e.Hint)
 }
 
-// IsErrServerMissing reports whether err is an *ErrServerMissing.
-// Used by the bridge to decide between missing-hint rendering
-// and a generic error line.
-func IsErrServerMissing(err error) bool {
-	var e *ErrServerMissing
-	return errors.As(err, &e)
-}
-
 // Manager owns the powernap clients, the 30 s unavailable map,
 // and the work directory used as rootURI when initialising servers.
 // A single Manager instance is shared by every file viewer across

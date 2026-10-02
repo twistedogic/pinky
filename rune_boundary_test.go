@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/twistedogic/pinky/internal/render"
+)
 
 // TestClampToRuneBoundary_ASCIIPassthrough: ASCII-only lines have
 // every byte on a rune boundary, so any pos in [0, len] returns
@@ -20,9 +24,9 @@ func TestClampToRuneBoundary_ASCIIPassthrough(t *testing.T) {
 		{-1, 0},
 	}
 	for _, tc := range tests {
-		got := clampToRuneBoundary(line, tc.pos)
+		got := render.SnapToRuneStart(line, tc.pos)
 		if got != tc.want {
-			t.Errorf("clampToRuneBoundary(%q, %d) = %d; want %d", line, tc.pos, got, tc.want)
+			t.Errorf("render.SnapToRuneStart(%q, %d) = %d; want %d", line, tc.pos, got, tc.want)
 		}
 	}
 }
@@ -30,11 +34,11 @@ func TestClampToRuneBoundary_ASCIIPassthrough(t *testing.T) {
 // TestClampToRuneBoundary_EmptyLine: empty string returns pos
 // clamped to 0 (the only valid offset).
 func TestClampToRuneBoundary_EmptyLine(t *testing.T) {
-	if got := clampToRuneBoundary("", 0); got != 0 {
-		t.Errorf("clampToRuneBoundary(%q, 0) = %d; want 0", "", got)
+	if got := render.SnapToRuneStart("", 0); got != 0 {
+		t.Errorf("render.SnapToRuneStart(%q, 0) = %d; want 0", "", got)
 	}
-	if got := clampToRuneBoundary("", 5); got != 0 {
-		t.Errorf("clampToRuneBoundary(%q, 5) = %d; want 0", "", got)
+	if got := render.SnapToRuneStart("", 5); got != 0 {
+		t.Errorf("render.SnapToRuneStart(%q, 5) = %d; want 0", "", got)
 	}
 }
 
@@ -43,14 +47,14 @@ func TestClampToRuneBoundary_EmptyLine(t *testing.T) {
 // 0 (the rune's start).
 func TestClampToRuneBoundary_MiddleOfRuneSnapsBack(t *testing.T) {
 	line := "é"
-	if got := clampToRuneBoundary(line, 0); got != 0 {
-		t.Errorf("clampToRuneBoundary(%q, 0) = %d; want 0", line, got)
+	if got := render.SnapToRuneStart(line, 0); got != 0 {
+		t.Errorf("render.SnapToRuneStart(%q, 0) = %d; want 0", line, got)
 	}
-	if got := clampToRuneBoundary(line, 1); got != 0 {
-		t.Errorf("clampToRuneBoundary(%q, 1) = %d; want 0 (rune start)", line, got)
+	if got := render.SnapToRuneStart(line, 1); got != 0 {
+		t.Errorf("render.SnapToRuneStart(%q, 1) = %d; want 0 (rune start)", line, got)
 	}
-	if got := clampToRuneBoundary(line, 2); got != 2 {
-		t.Errorf("clampToRuneBoundary(%q, 2) = %d; want 2 (line end)", line, got)
+	if got := render.SnapToRuneStart(line, 2); got != 2 {
+		t.Errorf("render.SnapToRuneStart(%q, 2) = %d; want 2 (line end)", line, got)
 	}
 }
 
@@ -79,9 +83,9 @@ func TestClampToRuneBoundary_MixedLine(t *testing.T) {
 		{9, 9},   // line end
 	}
 	for _, tc := range tests {
-		got := clampToRuneBoundary(line, tc.pos)
+		got := render.SnapToRuneStart(line, tc.pos)
 		if got != tc.want {
-			t.Errorf("clampToRuneBoundary(%q, %d) = %d; want %d", line, tc.pos, got, tc.want)
+			t.Errorf("render.SnapToRuneStart(%q, %d) = %d; want %d", line, tc.pos, got, tc.want)
 		}
 	}
 }
@@ -90,9 +94,9 @@ func TestClampToRuneBoundary_MixedLine(t *testing.T) {
 // valid rune boundary (the position one past the last byte).
 func TestClampToRuneBoundary_AtLineEnd(t *testing.T) {
 	for _, line := range []string{"a", "é", "abc", "日本語"} {
-		got := clampToRuneBoundary(line, len(line))
+		got := render.SnapToRuneStart(line, len(line))
 		if got != len(line) {
-			t.Errorf("clampToRuneBoundary(%q, len) = %d; want %d", line, got, len(line))
+			t.Errorf("render.SnapToRuneStart(%q, len) = %d; want %d", line, got, len(line))
 		}
 	}
 }

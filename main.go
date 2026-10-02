@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"time"
@@ -55,7 +54,6 @@ func main() {
 		lspMgr := pinkylsp.New(model.fileRoot)
 		model.lsp = lspMgr
 		model.lsphub = pinkylsp.NewBridge(lspMgr)
-		_ = context.Background // reserved for any cancellation LSP requests
 	} else if err := tmux.RequireServer(); err != nil {
 		// No tmux server: no agent pane can exist. Fall back to the
 		// cwd file navigator instead of refusing to start.
