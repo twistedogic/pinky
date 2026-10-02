@@ -679,12 +679,14 @@ func (m model) handleHoverMsg(msg pinkylsp.HoverMsg) (tea.Model, tea.Cmd) {
 }
 
 // showHoverModal sizes and populates the modal's viewport for one
-// hover reply. Width is capped so the box doesn't stretch the
-// full terminal on wide screens; height is content-driven up to
-// ~15 rows so very long go-doc hovers stay scrollable. A custom
-// KeyMap restricts the viewport to scroll keys only — h, l, d, b,
-// f, space would otherwise conflict with the file viewer's own
-// bindings.
+// hover reply. Content is rendered as markdown (glamour) with the
+// custom stylesheet in internal/render so headers/code blocks get
+// accent colors that fit pinky's palette. Width is capped so the box
+// doesn't stretch the full terminal on wide screens; height is
+// content-driven up to ~15 rows so very long go-doc hovers stay
+// scrollable. A custom KeyMap restricts the viewport to scroll keys
+// only — h, l, d, b, f, space would otherwise conflict with the
+// file viewer's own bindings.
 func (m *model) showHoverModal(content string) {
 	width := m.width - 4
 	if width > 60 {
@@ -693,8 +695,10 @@ func (m *model) showHoverModal(content string) {
 	if width < 20 {
 		width = 20
 	}
-	contentLines := strings.Count(content, "\n") + 1
-	height := contentLines + 2 // +2 for the box's own padding/border
+	bodyW := width - 2 // border
+	rendered := render.RenderMarkdown(content, bodyW)
+	renderedLines := strings.Count(rendered, "\n") + 1
+	height := renderedLines + 2 // +2 for the box's own padding/border
 	maxHeight := m.height - 8
 	if maxHeight < 5 {
 		maxHeight = 5
@@ -708,7 +712,6 @@ func (m *model) showHoverModal(content string) {
 	if height < 3 {
 		height = 3
 	}
-	bodyW := width - 2 // border
 	bodyH := height - 2
 	if !m.hoverModal.visible {
 		m.hoverModal.viewport = viewport.New(
@@ -719,7 +722,10 @@ func (m *model) showHoverModal(content string) {
 	}
 	m.hoverModal.viewport.SetWidth(bodyW)
 	m.hoverModal.viewport.SetHeight(bodyH)
-	m.hoverModal.viewport.SetContent(hoverModalBodyStyle.Render(content))
+	// ponytail: drop hoverModalBodyStyle here — glamour's own
+    // stylesheet paints the body. The modal box's cyan border is
+    // the only chrome; the inside reads as accent-on-default.
+	m.hoverModal.viewport.SetContent(rendered)
 	m.hoverModal.viewport.GotoTop()
 	m.hoverModal.visible = true
 }
@@ -1069,7 +1075,10 @@ func (m *model) enterCommentComposer(a commentAnchor) {
 
 // handleCommentComposerKey processes a keypress in stateCommentComposer.
 // Enter saves the new comment and returns to nav without sending; the
-// accumulated batch flushes only via `s` in stateNav. Esc cancels.
+// accumulated batch flushes only via `s` in stateNav. Esc and q cancel
+// (mirror the hover modal: the dialogue is modal, single-char dismiss
+// keys consume the keypress so the user can't accidentally exit the
+// file viewer or quit pinky while reading/canceling the prompt).
 func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	kp, ok := msg.(tea.KeyPressMsg)
 	if !ok {
@@ -1089,13 +1098,21 @@ func (m model) handleCommentComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if isKeyRune(msg, 'q') {
+		m.cancelCommentComposer()
+		return m, nil
+	}
 	var taCmd tea.Cmd
 	m.commentTa, taCmd = m.commentTa.Update(msg)
 	return m, taCmd
 }
 
-// cancelCommentComposer returns to idle without saving.
+// cancelCommentComposer returns to idle without saving. Resets the
+// textarea so the next composer open (via c) is clean — and so the
+// buffer doesn't carry "wiped but not cleared" text within the same
+// open-state if the user reopens before any other reset path runs.
 func (m *model) cancelCommentComposer() {
+	m.commentTa.Reset()
 	m.commentTa.Blur()
 	m.state = stateNav
 	m.reflow()
@@ -1570,9 +1587,12 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.recoverPanic("handleFileViewKey",
 		len(m.fileViewer.lines), m.fileViewer.visual.Active)
 	// Hover modal: scroll keys route to the modal's viewport so
-	// long go-doc hovers stay readable; everything else dismisses
-	// and falls through to the normal handler (so `d` after `K`
-	// dismisses the modal AND fires the definition query).
+	// long go-doc hovers stay readable; Esc and q dismiss the
+	// modal without doing anything else (so reading a hover
+	// doesn't accidentally quit the app or leave the file
+	// viewer); everything else dismisses and falls through to the
+	// normal handler (so `d` after `K` dismisses the modal AND
+	// fires the definition query).
 	if m.hoverModal.visible {
 		km := m.hoverModal.viewport.KeyMap
 		if key.Matches(msg, km.Down) || key.Matches(msg, km.Up) ||
@@ -1581,6 +1601,11 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var vpCmd tea.Cmd
 			m.hoverModal.viewport, vpCmd = m.hoverModal.viewport.Update(msg)
 			return m, vpCmd
+		}
+		if isEsc(msg) || isKeyRune(msg, 'q') {
+			m.hideHoverModal()
+			m.refreshFileView()
+			return m, nil
 		}
 		m.hideHoverModal()
 		m.refreshFileView()

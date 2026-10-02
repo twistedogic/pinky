@@ -307,6 +307,63 @@ func TestFileView_HoverModal_RendersIntoView(t *testing.T) {
 	}
 }
 
+// TestFileView_HoverModal_EscDismissesNotExits: when the hover
+// modal is active, Esc must dismiss the modal AND keep the file
+// viewer (not leave to dir nav). Otherwise reading a hover is a
+// trap — pressing Esc to close the popup also navigates out of
+// the file.
+func TestFileView_HoverModal_EscDismissesNotExits(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "func Foo()"})
+	m = updatedModelPtr(upd)
+	if !m.hoverModal.visible {
+		t.Fatal("setup: modal not visible")
+	}
+	if m.state != stateFileView {
+		t.Fatalf("setup: expected stateFileView; got %v", m.state)
+	}
+
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updatedModelPtr(upd)
+
+	if m.hoverModal.visible {
+		t.Errorf("Esc should dismiss modal; still visible")
+	}
+	if m.state != stateFileView {
+		t.Errorf("Esc should keep stateFileView; got %v", m.state)
+	}
+}
+
+// TestFileView_HoverModal_QDismissesNotQuits: same as Esc — when the
+// hover modal is active, q must dismiss the modal rather than
+// quitting the app. Without this carve-out reading a hover means
+// "press q to close it" silently kills pinky.
+func TestFileView_HoverModal_QDismissesNotQuits(t *testing.T) {
+	m := attachFileFixture(t)
+	openFile(t, m, "src/main.go")
+	upd, _ := m.Update(pinkylsp.HoverMsg{Contents: "func Foo()"})
+	m = updatedModelPtr(upd)
+	if !m.hoverModal.visible {
+		t.Fatal("setup: modal not visible")
+	}
+
+	upd, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = updatedModelPtr(upd)
+
+	if m.hoverModal.visible {
+		t.Errorf("q should dismiss modal; still visible")
+	}
+	if cmd != nil {
+		// tea.Quit is the only cmd handleFileViewKey produces for
+		// 'q'. Any non-nil cmd means the quit path fired.
+		t.Errorf("q should not return a cmd (quit path); got %T", cmd)
+	}
+	if m.state != stateFileView {
+		t.Errorf("q should keep stateFileView; got %v", m.state)
+	}
+}
+
 // TestFileView_MissingServerHint_StaysInFooter: a missing-server
 // reply still sets the footer hint (NOT the modal) — errors stay
 // visible until acknowledged, while hover is a transient popup.
