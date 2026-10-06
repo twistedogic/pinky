@@ -228,10 +228,26 @@ type model struct {
 
 	// fileSearchActive + fileSearch implement `/` fuzzy filename
 	// search inside stateFileNav. While active, collapse state is
-	// ignored and the visible list is filtered by fuzzyMatch
+	// ignored and the visible list is filtered by render.FindHits
 	// against each entry's path.
 	fileSearchActive bool
 	fileSearch       []rune
+
+	// navSearch is the search state for stateNav (the message
+	// view). active = prompt is open. query = the current query
+	// while the prompt is open. hits = the matches against
+	// m.lines, recomputed on every render when active || query
+	// is non-empty. cur = index of the "current" hit in hits
+	// (the one under the cursor), or -1 if none. See
+	// design.md for the lifecycle.
+	navSearch searchState
+	// fileSearchState is the search state for stateFileView
+	// (the file content). Same shape as navSearch; lives
+	// separately so a search in one view doesn't leak into the
+	// other. (The `fileSearch` / `fileSearchActive` fields above
+	// are the file navigator's filename filter; do not
+	// confuse.)
+	fileSearchState searchState
 
 	// fileViewer is the state for stateFileView.
 	fileViewer fileViewer
@@ -577,6 +593,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if last != nil {
 			if last.Text != m.latest.Text {
 				m.comments = nil
+				// A new message wipes the search state — the
+				// previous query and hits are no longer
+				// meaningful, and the dim highlights would
+				// otherwise paint over text that isn't there.
+				m.navSearch.reset()
 			}
 			m.latest = *last
 			if m.hist != nil {
@@ -922,7 +943,7 @@ func (m model) visibleFileEntries() []workspace.Entry {
 		query := string(m.fileSearch)
 		out := make([]workspace.Entry, 0, len(m.fileEntries))
 		for _, e := range m.fileEntries {
-			if fuzzyMatch(query, e.Path) {
+			if len(render.FindHits(query, []string{e.Path})) > 0 {
 				out = append(out, e)
 			}
 		}
@@ -951,25 +972,213 @@ func (m model) visibleFileEntries() []workspace.Entry {
 	return out
 }
 
-// fuzzyMatch reports whether every rune of query appears in name
-// in order (case-insensitive). Empty query matches everything.
-// ponytail: ~6 lines of stdlib; no fuzzy-match dep needed.
-func fuzzyMatch(query, name string) bool {
-	if query == "" {
-		return true
+// fuzzyMatch is gone; the file navigator now uses render.FindHits
+// directly (see visibleFileEntries).
+
+// searchState is the per-view state for the `/` fuzzy search
+// surface. active means the prompt is open and typing appends to
+// query. hits is the current match list (nil when there's no
+// query or no matches); cur is the index of the match under the
+// cursor, or -1 when the cursor isn't on a hit.
+//
+// Two instances live on the model: navSearch (stateNav) and
+// fileSearchState (stateFileView). They share zero state — a
+// search in one view doesn't leak into the other.
+type searchState struct {
+	active bool
+	query  []rune
+	hits   []render.Hit
+	cur    int
+}
+
+// reset clears every field. Used by Esc, by new-message /
+// new-file transitions, and by exitFileViewer.
+func (s *searchState) reset() {
+	s.active = false
+	s.query = nil
+	s.hits = nil
+	s.cur = -1
+}
+
+// enter opens the search prompt with an empty query. The cursor
+// does not move and no highlights are drawn yet (query is empty).
+func (m *model) enterNavSearch() {
+	m.navSearch.reset()
+	m.navSearch.active = true
+}
+
+func (m *model) enterFileViewerSearch() {
+	m.fileSearchState.reset()
+	m.fileSearchState.active = true
+}
+
+// commitNavSearch closes the search prompt and jumps the nav
+// cursor to the first match (in document order) at or after the
+// current cursor position. Recomputes hits, sets cur, scrolls
+// the cursor into view. No-op if the query is empty.
+func (m *model) commitNavSearch() {
+	m.navSearch.active = false
+	if len(m.navSearch.query) == 0 {
+		m.navSearch.hits = nil
+		m.navSearch.cur = -1
+		m.refreshViewport()
+		return
 	}
-	qr := []rune(strings.ToLower(query))
-	nr := []rune(strings.ToLower(name))
-	qi := 0
-	for _, r := range nr {
-		if r == qr[qi] {
-			qi++
-			if qi == len(qr) {
-				return true
-			}
+	m.navSearch.hits = render.FindHits(string(m.navSearch.query), m.lines)
+	cur := firstHitAtOrAfter(m.navSearch.hits, m.cursor.LineIdx, m.cursor.CharPos)
+	m.navSearch.cur = cur
+	if cur >= 0 {
+		h := m.navSearch.hits[cur]
+		m.cursor.LineIdx = h.LineIdx
+		m.cursor.CharPos = h.ByteA
+		m.scrollCursorIntoView()
+	}
+	m.refreshViewport()
+}
+
+// commitFileSearch is the file-viewer analogue of commitNavSearch.
+// Resets the file viewer's preferred column to the hit's charPos
+// (since the cursor is teleported to an arbitrary byte).
+func (m *model) commitFileSearch() {
+	m.fileSearchState.active = false
+	if len(m.fileSearchState.query) == 0 {
+		m.fileSearchState.hits = nil
+		m.fileSearchState.cur = -1
+		return
+	}
+	m.fileSearchState.hits = render.FindHits(string(m.fileSearchState.query), m.fileViewer.lines)
+	cur := firstHitAtOrAfter(m.fileSearchState.hits, m.fileViewer.cursor-1, m.fileViewer.charPos)
+	m.fileSearchState.cur = cur
+	if cur >= 0 {
+		h := m.fileSearchState.hits[cur]
+		m.fileViewer.cursor = h.LineIdx + 1
+		m.fileViewer.charPos = h.ByteA
+		m.fileViewer.preferred = h.ByteA
+	}
+}
+
+// firstHitAtOrAfter returns the index of the first hit whose
+// (LineIdx, ByteA) is at or after (afterLine, afterByte), or -1
+// if no such hit exists. hits is assumed to be sorted by
+// (LineIdx, ByteA).
+func firstHitAtOrAfter(hits []render.Hit, afterLine, afterByte int) int {
+	for i, h := range hits {
+		if h.LineIdx > afterLine || (h.LineIdx == afterLine && h.ByteA >= afterByte) {
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// firstHitAtOrBefore returns the index of the last hit whose
+// (LineIdx, ByteA) is at or before (beforeLine, beforeByte), or
+// -1 if no such hit exists.
+func firstHitAtOrBefore(hits []render.Hit, beforeLine, beforeByte int) int {
+	last := -1
+	for i, h := range hits {
+		if h.LineIdx < beforeLine || (h.LineIdx == beforeLine && h.ByteA <= beforeByte) {
+			last = i
+		} else {
+			break
+		}
+	}
+	return last
+}
+
+// cycleSearchHit advances (*cur) by delta (wrapping modulo
+// len(hits)) and returns the new index. If hits is empty, it
+// is a no-op and returns -1. Callers should treat cur as
+// opaque — they pass the address of their field and read back
+// the updated value.
+func cycleSearchHit(delta int, hits []render.Hit, cur *int) int {
+	if len(hits) == 0 {
+		*cur = -1
+		return -1
+	}
+	*cur = ((*cur + delta) + len(hits)) % len(hits)
+	return *cur
+}
+
+// handleNavSearchKey routes keys while the search prompt is open
+// in stateNav. Printable runes append to the query; Backspace
+// trims; Esc clears; Enter commits (jumps cursor, calls
+// commitNavSearch). Arrow keys fall through to the viewport (the
+// file navigator's `/` does the same — scroll without closing the
+// prompt). Any other key (j/k/h/l/w/b/c/s/v/r/n/q) is consumed
+// by the query.
+func (m model) handleNavSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	kp, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	switch kp.Code {
+	case tea.KeyEsc:
+		m.navSearch.reset()
+		m.refreshViewport()
+		return m, nil
+	case tea.KeyEnter:
+		m.commitNavSearch()
+		m.refreshViewport()
+		return m, nil
+	case tea.KeyBackspace:
+		if len(m.navSearch.query) > 0 {
+			m.navSearch.query = m.navSearch.query[:len(m.navSearch.query)-1]
+			m.refreshViewport()
+		}
+		return m, nil
+	}
+	if r, ok := singleRune(msg); ok && r != 0 {
+		// Skip '/' itself so the user can't re-open the prompt
+		// mid-query; the active flag is the only state that
+		// matters.
+		if r == '/' {
+			return m, nil
+		}
+		m.navSearch.query = append(m.navSearch.query, r)
+		m.refreshViewport()
+		return m, nil
+	}
+	// Arrow / PageUp / PageDown / Home / End — forward to viewport.
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+	return m, vpCmd
+}
+
+// handleFileSearchKey is the file-viewer analogue of
+// handleNavSearchKey. Same shape; closes the prompt on Esc,
+// commits on Enter.
+func (m model) handleFileSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	kp, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	switch kp.Code {
+	case tea.KeyEsc:
+		m.fileSearchState.reset()
+		m.refreshFileView()
+		return m, nil
+	case tea.KeyEnter:
+		m.commitFileSearch()
+		m.refreshFileView()
+		return m, nil
+	case tea.KeyBackspace:
+		if len(m.fileSearchState.query) > 0 {
+			m.fileSearchState.query = m.fileSearchState.query[:len(m.fileSearchState.query)-1]
+			m.refreshFileView()
+		}
+		return m, nil
+	}
+	if r, ok := singleRune(msg); ok && r != 0 {
+		if r == '/' {
+			return m, nil
+		}
+		m.fileSearchState.query = append(m.fileSearchState.query, r)
+		m.refreshFileView()
+		return m, nil
+	}
+	var vpCmd tea.Cmd
+	m.fileViewer.viewport, vpCmd = m.fileViewer.viewport.Update(msg)
+	return m, vpCmd
 }
 
 // moveFileCursor clamps fileCursor into [0, len(visible)-1] after
@@ -1265,11 +1474,68 @@ func (m *model) moveCursor(delta int) {
 }
 
 func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// While the search prompt is open, route every key through
+	// the search handler (it ignores '/' itself and forwards
+	// scroll keys to the viewport).
+	if m.navSearch.active {
+		return m.handleNavSearchKey(msg)
+	}
 	// Esc is a special key but is part of the nav surface (visual
 	// exit). Route it through the SM so single source of truth.
 	if isEsc(msg) {
+		// Clear any committed search state. The dim highlights
+		// would otherwise linger after the user dismisses the
+		// search.
+		if len(m.navSearch.hits) > 0 {
+			m.navSearch.reset()
+			m.refreshViewport()
+			return m, nil
+		}
 		action := render.NavHandle(0x1b, &m.nav, &m.cursor, &m.selection, m.lines, m.lineStartOffsets)
 		if action == render.ActionExitVisual {
+			m.refreshViewport()
+		}
+		return m, nil
+	}
+	// '/' opens the search prompt. Checked before NavHandle so
+	// the rune isn't routed to the nav state machine.
+	if isKeyRune(msg, '/') {
+		m.enterNavSearch()
+		m.refreshViewport()
+		return m, nil
+	}
+	// 'n' / 'N' cycle the search hits when a search is active
+	// (i.e. a previous search's hits are still on screen). When
+	// no search is active, 'n' falls through to NavHandle and
+	// enters compose mode (the existing behaviour).
+	if isKeyRune(msg, 'n') && len(m.navSearch.hits) > 0 {
+		if m.navSearch.cur < 0 {
+			// No current hit (e.g. cursor moved with j/k); start
+			// at the first hit at or after the cursor.
+			m.navSearch.cur = firstHitAtOrAfter(m.navSearch.hits, m.cursor.LineIdx, m.cursor.CharPos)
+		} else {
+			cycleSearchHit(+1, m.navSearch.hits, &m.navSearch.cur)
+		}
+		if m.navSearch.cur >= 0 {
+			h := m.navSearch.hits[m.navSearch.cur]
+			m.cursor.LineIdx = h.LineIdx
+			m.cursor.CharPos = h.ByteA
+			m.scrollCursorIntoView()
+			m.refreshViewport()
+		}
+		return m, nil
+	}
+	if isKeyRune(msg, 'N') && len(m.navSearch.hits) > 0 {
+		if m.navSearch.cur < 0 {
+			m.navSearch.cur = firstHitAtOrBefore(m.navSearch.hits, m.cursor.LineIdx, m.cursor.CharPos)
+		} else {
+			cycleSearchHit(-1, m.navSearch.hits, &m.navSearch.cur)
+		}
+		if m.navSearch.cur >= 0 {
+			h := m.navSearch.hits[m.navSearch.cur]
+			m.cursor.LineIdx = h.LineIdx
+			m.cursor.CharPos = h.ByteA
+			m.scrollCursorIntoView()
 			m.refreshViewport()
 		}
 		return m, nil
@@ -1277,6 +1543,14 @@ func (m model) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Single-rune keys go through the nav state machine. Special
 	// keys (arrows, PageUp/Down, Home/End) forward to the viewport.
 	if r, ok := singleRune(msg); ok {
+		// When a search is active, any of the cursor-motion keys
+		// (j/k/h/l/w/b) resets the current-hit index — the next
+		// 'n' will continue from the new cursor position, not
+		// from the stale hit. Matches vim's "search anchor
+		// resets on motion" rule.
+		if m.navSearch.cur >= 0 && (r == 'j' || r == 'k' || r == 'h' || r == 'l' || r == 'w' || r == 'b') {
+			m.navSearch.cur = -1
+		}
 		action := render.NavHandle(r, &m.nav, &m.cursor, &m.selection, m.lines, m.lineStartOffsets)
 		switch action {
 		case render.ActionNone:
@@ -1515,6 +1789,11 @@ func (m *model) fileLineCount(path string) int {
 // openFileViewer loads path's content and transitions to
 // stateFileView.
 func (m *model) openFileViewer(path string) {
+	// A new file wipes the file-viewer search state — the prior
+	// query and hits are no longer meaningful, and the dim
+	// highlights would otherwise paint over text that isn't
+	// there.
+	m.fileSearchState.reset()
 	full := m.fileRoot + "/" + path
 	data, err := os.ReadFile(full)
 	if err != nil {
@@ -1572,6 +1851,18 @@ func (m *model) fileCommentsFor(path string) []render.Comment {
 // c opens the comment composer, s flushes, d/R/K fire LSP
 // queries, Esc returns to dir nav, Tab returns to message tab.
 func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// While the search prompt is open, route every key through
+	// the search handler.
+	if m.fileSearchState.active {
+		return m.handleFileSearchKey(msg)
+	}
+	// Esc with committed hits (no active prompt) clears the
+	// search state, mirroring the message view's behaviour.
+	if isEsc(msg) && len(m.fileSearchState.hits) > 0 {
+		m.fileSearchState.reset()
+		m.refreshFileView()
+		return m, nil
+	}
 	m.recoverPanic("handleFileViewKey",
 		len(m.fileViewer.lines), m.fileViewer.visual.Active)
 	// Hover modal: scroll keys route to the modal's viewport so
@@ -1623,6 +1914,41 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// picker-tabs where there's nothing to pop out of.
 		m.exitFileViewer()
 		return m, nil
+	case isKeyRune(msg, '/'):
+		// '/' opens the search prompt. (The active check at the
+		// top of this handler already routed an open prompt
+		// elsewhere.)
+		m.enterFileViewerSearch()
+		m.refreshFileView()
+		return m, nil
+	case isKeyRune(msg, 'n') && len(m.fileSearchState.hits) > 0:
+		if m.fileSearchState.cur < 0 {
+			m.fileSearchState.cur = firstHitAtOrAfter(m.fileSearchState.hits, m.fileViewer.cursor-1, m.fileViewer.charPos)
+		} else {
+			cycleSearchHit(+1, m.fileSearchState.hits, &m.fileSearchState.cur)
+		}
+		if m.fileSearchState.cur >= 0 {
+			h := m.fileSearchState.hits[m.fileSearchState.cur]
+			m.fileViewer.cursor = h.LineIdx + 1
+			m.fileViewer.charPos = h.ByteA
+			m.fileViewer.preferred = h.ByteA
+			m.refreshFileView()
+		}
+		return m, nil
+	case isKeyRune(msg, 'N') && len(m.fileSearchState.hits) > 0:
+		if m.fileSearchState.cur < 0 {
+			m.fileSearchState.cur = firstHitAtOrBefore(m.fileSearchState.hits, m.fileViewer.cursor-1, m.fileViewer.charPos)
+		} else {
+			cycleSearchHit(-1, m.fileSearchState.hits, &m.fileSearchState.cur)
+		}
+		if m.fileSearchState.cur >= 0 {
+			h := m.fileSearchState.hits[m.fileSearchState.cur]
+			m.fileViewer.cursor = h.LineIdx + 1
+			m.fileViewer.charPos = h.ByteA
+			m.fileViewer.preferred = h.ByteA
+			m.refreshFileView()
+		}
+		return m, nil
 	case isKeyRune(msg, 's'):
 		m.handleSend()
 		return m, nil
@@ -1665,11 +1991,16 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if isKeyRune(msg, 'j') {
 		m.missingServerHint = ""
+		// Reset the current-hit index on motion so the next
+		// 'n' continues from the new cursor position, not
+		// from the stale hit.
+		m.fileSearchState.cur = -1
 		m.fileViewMoveLine(+1)
 		return m, nil
 	}
 	if isKeyRune(msg, 'k') {
 		m.missingServerHint = ""
+		m.fileSearchState.cur = -1
 		m.fileViewMoveLine(-1)
 		return m, nil
 	}
@@ -1679,11 +2010,13 @@ func (m model) handleFileViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// highlight tracks the cursor exactly as today.
 	if isKeyRune(msg, 'l') {
 		m.missingServerHint = ""
+		m.fileSearchState.cur = -1
 		m.fileViewMoveRune(+1)
 		return m, nil
 	}
 	if isKeyRune(msg, 'h') {
 		m.missingServerHint = ""
+		m.fileSearchState.cur = -1
 		m.fileViewMoveRune(-1)
 		return m, nil
 	}
@@ -2058,6 +2391,9 @@ func (m *model) exitFileViewer() {
 	m.hideHoverModal()
 	m.missingServerHint = ""
 	m.fileViewer.visual.Active = false
+	// Leaving the file viewer wipes the file-viewer search
+	// state — re-entering doesn't restore the prior query.
+	m.fileSearchState.reset()
 	m.state = stateFileNav
 	m.reflow()
 }
@@ -2376,6 +2712,7 @@ func (m model) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{defaultKeyMap.NavBlockDown, defaultKeyMap.NavBlockUp, defaultKeyMap.NavRuneLeft, defaultKeyMap.NavRuneRight, defaultKeyMap.NavWordRight, defaultKeyMap.NavWordLeft},
 			{defaultKeyMap.NavVisual, defaultKeyMap.NavComment, defaultKeyMap.NavSend, defaultKeyMap.NavCompose, defaultKeyMap.NavRefresh},
+			{defaultKeyMap.NavSearch, defaultKeyMap.NavSearchNext, defaultKeyMap.NavSearchPrev},
 			{defaultKeyMap.Tab, defaultKeyMap.NavQuit, defaultKeyMap.Help},
 		}
 	case stateCompose:
@@ -2399,6 +2736,7 @@ func (m model) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{defaultKeyMap.FileViewDown, defaultKeyMap.FileViewUp, defaultKeyMap.FileViewLeft, defaultKeyMap.FileViewRight, defaultKeyMap.FileViewWordRight, defaultKeyMap.FileViewWordLeft},
 			{defaultKeyMap.FileViewVisual, defaultKeyMap.FileViewComment, defaultKeyMap.NavSend},
+			{defaultKeyMap.FileViewSearch, defaultKeyMap.FileViewSearchNext, defaultKeyMap.FileViewSearchPrev},
 			{defaultKeyMap.FileViewDefinition, defaultKeyMap.FileViewReferences, defaultKeyMap.FileViewHover},
 			{defaultKeyMap.FileViewBack, defaultKeyMap.Tab, defaultKeyMap.Help},
 		}
@@ -2553,6 +2891,24 @@ func (m *model) refreshViewport() {
 			wrapWidth,
 		)
 	}
+	// Search dim: highlight every non-current match in m.navSearch.hits
+	// with a background colour. The cursor's paint above already
+	// covers the current hit with the inverted-block style, so
+	// we skip the index at m.navSearch.cur here. The dim splice
+	// preserves any glamour-set background (e.g. the 228-on-236
+	// code-block style) on the cells around each hit.
+	if len(m.navSearch.hits) > 0 {
+		for i, h := range m.navSearch.hits {
+			if i == m.navSearch.cur {
+				continue
+			}
+			guttered = render.SpliceStyleAcrossWrap(
+				guttered, m.lines, h,
+				"\x1b[48;5;58m",
+				wrapWidth, m.sourceToFirst,
+			)
+		}
+	}
 	m.viewport.SetContent(guttered)
 }
 
@@ -2597,12 +2953,13 @@ func (m model) View() tea.View {
 			helpView,
 		))
 	case stateNav:
-		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			m.viewport.View(),
-			helpView,
-			m.statusLine(),
-		))
+		var navParts []string
+		navParts = append(navParts, header, m.viewport.View())
+		if m.navSearch.active {
+			navParts = append(navParts, m.navSearchPromptView())
+		}
+		navParts = append(navParts, helpView, m.statusLine())
+		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left, navParts...))
 	case stateCompose:
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -2914,6 +3271,21 @@ func (m model) renderFileContent() string {
 			gutter = " "
 		}
 		selected := applySelection(content, ln, m.fileViewer.visual, m.fileViewer.cursor, m.fileViewer.charPos)
+		// Search dim: if this line has a non-current hit in
+		// m.fileSearchState.hits, splice the dim background on
+		// the hit's byte range. The cursor's paint (below) runs
+		// after this pass so the current hit's inverted-block
+		// style wins.
+		if len(m.fileSearchState.hits) > 0 {
+			for hi, h := range m.fileSearchState.hits {
+				if hi == m.fileSearchState.cur {
+					continue
+				}
+				if h.LineIdx == i && h.ByteC <= len(content) {
+					selected = render.SpliceStyle(selected, "\x1b[48;5;58m", h.ByteA, h.ByteC)
+				}
+			}
+		}
 		var rendered string
 		if ln == m.fileViewer.cursor {
 			rendered = render.ApplyCursor(selected, content, m.fileViewer.charPos)
@@ -2966,6 +3338,15 @@ func (m model) todoEditView() string {
 // `lines N-M of K` position indicator) followed by the file
 // viewport's visible window. The header sits outside the viewport
 // so the indicator stays visible while the body scrolls.
+// navSearchPromptView renders the one-line `/<query>▏` prompt
+// shown at the bottom of the message view while the search input
+// is open. The half-block cursor and the query text use the
+// dim style so the prompt reads as transient input.
+func (m model) navSearchPromptView() string {
+	q := dimStyle.Render("/" + string(m.navSearch.query) + "▏")
+	return q
+}
+
 func (m model) fileViewView() string {
 	header := fmt.Sprintf("file — %s", m.fileViewer.path)
 	if len(m.fileViewer.lines) > m.fileViewer.viewport.Height() {
@@ -2976,7 +3357,11 @@ func (m model) fileViewView() string {
 		}
 		header += fmt.Sprintf("  (lines %d-%d of %d)", top, bot, len(m.fileViewer.lines))
 	}
-	return headerStyle.Render(header) + "\n" + m.fileViewer.viewport.View()
+	parts := []string{headerStyle.Render(header), m.fileViewer.viewport.View()}
+	if m.fileSearchState.active {
+		parts = append(parts, dimStyle.Render("/"+string(m.fileSearchState.query)+"▏"))
+	}
+	return strings.Join(parts, "\n")
 }
 
 // maybeHoverFooter returns the one-line hover / install-hint row

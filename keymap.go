@@ -36,6 +36,9 @@ type keyMap struct {
 	NavCompose   key.Binding // n
 	NavRefresh   key.Binding // r
 	NavQuit      key.Binding // q
+	NavSearch      key.Binding // /
+	NavSearchNext  key.Binding // n  (when search active)
+	NavSearchPrev  key.Binding // N  (when search active)
 
 	// File nav (stateFileNav).
 	FileNavUp      key.Binding // k, ↑
@@ -60,6 +63,9 @@ type keyMap struct {
 	FileViewReferences key.Binding // R
 	FileViewHover      key.Binding // K
 	FileViewBack       key.Binding // esc
+	FileViewSearch     key.Binding // /
+	FileViewSearchNext key.Binding // n
+	FileViewSearchPrev key.Binding // N
 
 	// Compose
 	Newline         key.Binding // enter
@@ -152,6 +158,18 @@ var defaultKeyMap = keyMap{
 		key.WithKeys("q"),
 		key.WithHelp("q", "quit pinky"),
 	),
+	NavSearch: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
+	),
+	NavSearchNext: key.NewBinding(
+		key.WithKeys("n"),
+		key.WithHelp("n", "next hit"),
+	),
+	NavSearchPrev: key.NewBinding(
+		key.WithKeys("N"),
+		key.WithHelp("N", "prev hit"),
+	),
 
 	// File nav
 	FileNavUp: key.NewBinding(
@@ -223,6 +241,18 @@ var defaultKeyMap = keyMap{
 	FileViewBack: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "back"),
+	),
+	FileViewSearch: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
+	),
+	FileViewSearchNext: key.NewBinding(
+		key.WithKeys("n"),
+		key.WithHelp("n", "next hit"),
+	),
+	FileViewSearchPrev: key.NewBinding(
+		key.WithKeys("N"),
+		key.WithHelp("N", "prev hit"),
 	),
 	FileViewDefinition: key.NewBinding(
 		key.WithKeys("d"),

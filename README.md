@@ -121,8 +121,10 @@ markdown. Within that message:
 | `Esc` | Exit visual mode |
 | `c` | Open the comment composer (anchored to selection, or whole current line) |
 | `s` | Send all accumulated comments in one tmux inject |
-| `n` | Enter compose mode |
+| `n` | Enter compose mode (or, when a search is active, jump to the next match) |
+| `N` | When a search is active, jump to the previous match |
 | `r` | Re-poll the agent session |
+| `/` | Open the search prompt. Type to filter, `Enter` jumps the cursor to the first match, `n`/`N` cycle, `Esc` clears |
 | `Tab` | Switch to the file review tab |
 | `q` / `Ctrl+C` | Quit |
 | `?` | Toggle the keymap page |
@@ -172,7 +174,10 @@ to the message view, restoring the sub-state you left.
 | `R` | LSP references at the **word under the cursor** — picker on N≥1, silent on 0 |
 | `K` | LSP hover at the **word under the cursor** — footer line until the next key press |
 | `s` | Send all accumulated comments |
-| `Esc` | Exit visual if active; otherwise return to the dir navigator |
+| `/` | Open the search prompt. Type to filter, `Enter` jumps the cursor to the first match, `n`/`N` cycle, `Esc` clears |
+| `n` | When a search is active, jump to the next match and reset the `preferred` column to the hit's byte |
+| `N` | When a search is active, jump to the previous match |
+| `Esc` | Exit visual if active; otherwise, with a search active, clear the search; otherwise return to the dir navigator |
 | `Tab` | Switch to the message view (visual is preserved across the round-trip) |
 | `q` | Quit pinky (visual is discarded) |
 | `?` | Toggle the keymap page |
@@ -187,6 +192,14 @@ Server Protocol (LSP); the server binary is detected from the
 file extension and lazily spawned on first use, so the first
 query for a new language takes ~1 s and a missing server shows
 a one-line install hint.
+
+`/` opens a fuzzy search prompt in the file content. The
+matcher is a subsequence rule (every rune of the query appears
+in the source in order, case-insensitive). Every match is
+highlighted with a dim background; the current match is the
+cursor's inverted-block style. `n`/`N` cycle through matches
+and reset the `preferred` column to each hit's byte.
+
 
 ### Compose
 
