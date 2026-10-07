@@ -903,15 +903,16 @@ bindings are inactive. Arrow keys (`↑`/`↓`/`PageDown`/`PageUp`)
 are NOT consumed by the prompt — they continue to scroll the
 viewport, matching the file-navigator `/` behaviour.
 
-The match algorithm SHALL be the same subsequence matcher the
-file navigator's `/` and the message viewer's `/` use: every
-rune of the (case-folded) query appears in the (case-folded)
-source line in order. Every non-overlapping left-to-right match
-on each line SHALL be returned as a `(lineIdx, byteA, byteC)`
-triple, with the full list ordered by `(lineIdx, byteA)`. The
-match algorithm SHALL operate on `m.fileViewer.lines` (the raw
-file content split on `'\n'`); it SHALL NOT operate on the
-rendered ANSI string.
+The match algorithm SHALL be a literal case-insensitive
+substring match: the (case-folded) query bytes SHALL appear as
+a contiguous run in the (case-folded) source line. Every
+non-overlapping left-to-right match on each line SHALL be
+returned as a `(lineIdx, byteA, byteC)` triple, with the full
+list ordered by `(lineIdx, byteA)`. The match SHALL NOT be a
+subsequence match — the query bytes must be contiguous in the
+source. The match algorithm SHALL operate on `m.fileViewer.lines`
+(the raw file content split on `'\n'`); it SHALL NOT operate on
+the rendered ANSI string.
 
 An empty query SHALL produce no hits and no highlight; a query
 with no matching characters SHALL produce no hits and no

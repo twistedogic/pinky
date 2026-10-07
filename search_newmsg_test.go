@@ -21,7 +21,7 @@ func TestNavSearch_NewMessageClearsSearch(t *testing.T) {
 	m = updated.(model)
 	// Commit a search.
 	m = keyModelVal(t, m, "/")
-	for _, r := range "msg" {
+	for _, r := range "message" {
 		m = keyModelVal(t, m, string(r))
 	}
 	upd, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

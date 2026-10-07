@@ -5,12 +5,13 @@ import (
 	"testing"
 )
 
-func TestFindHits_DoesNotAbandonLeftmost(t *testing.T) {
-	// "alpha" in "alpha beta alpha" must yield BOTH matches.
-	// A non-greedy algorithm that restarts on every qr[0] hit
-	// would lose the first "alpha" (the 'a' at byte 4 is qr[0]
-	// AND qr[4]; restarting there abandons the leftmost match).
-	// The greedy variant keeps the leftmost.
+func TestFindHits_LiteralSubstring(t *testing.T) {
+	// "alpha" in "alpha beta alpha" yields two contiguous
+	// substring matches: bytes 0..5 and 11..16. A subsequence
+	// matcher (the previous implementation) would have given a
+	// second hit at {0,9,16} — covering the 'a' of "beta" plus
+	// "lpha" from the second "alpha". Literal substring
+	// matches only the actual word.
 	hits := FindHits("alpha", []string{"alpha beta alpha"})
 	if len(hits) != 2 {
 		t.Fatalf("hits = %d, want 2", len(hits))
@@ -18,16 +19,26 @@ func TestFindHits_DoesNotAbandonLeftmost(t *testing.T) {
 	if hits[0] != (Hit{LineIdx: 0, ByteA: 0, ByteC: 5}) {
 		t.Errorf("hits[0] = %+v, want {0,0,5}", hits[0])
 	}
-	if hits[1] != (Hit{LineIdx: 0, ByteA: 9, ByteC: 16}) {
-		t.Errorf("hits[1] = %+v, want {0,9,16} (greedy start at 'a' of beta)", hits[1])
+	if hits[1] != (Hit{LineIdx: 0, ByteA: 11, ByteC: 16}) {
+		t.Errorf("hits[1] = %+v, want {0,11,16} (literal second alpha)", hits[1])
 	}
 }
 
-func TestFindHits_Subsequence(t *testing.T) {
-	// "the" in "the cat the dog" yields two non-overlapping
-	// matches: the first consumes bytes 0..3; the second starts
-	// at the 't' at byte 6 (greedy — the partial match from
-	// byte 6 is completed by 'h' and 'e' from "the dog").
+func TestFindHits_LiteralNotSubsequence(t *testing.T) {
+	// "abc" must NOT match "axxbc" — the runes are in order
+	// but not contiguous. This is the key difference from the
+	// previous subsequence matcher.
+	hits := FindHits("abc", []string{"axxbc"})
+	if len(hits) != 0 {
+		t.Errorf("literal 'abc' should not match subsequence 'axxbc'; got %d hits", len(hits))
+	}
+}
+
+func TestFindHits_LiteralContiguousOnly(t *testing.T) {
+	// "the" in "the cat the dog" yields two contiguous matches
+	// at the two literal "the" substrings: bytes 0..3 and
+	// 8..11. A subsequence matcher would have produced
+	// {0,6,11} (spanning the space).
 	hits := FindHits("the", []string{"the cat the dog"})
 	if len(hits) != 2 {
 		t.Fatalf("hits = %d, want 2", len(hits))
@@ -35,8 +46,8 @@ func TestFindHits_Subsequence(t *testing.T) {
 	if hits[0] != (Hit{LineIdx: 0, ByteA: 0, ByteC: 3}) {
 		t.Errorf("hits[0] = %+v, want {0,0,3}", hits[0])
 	}
-	if hits[1] != (Hit{LineIdx: 0, ByteA: 6, ByteC: 11}) {
-		t.Errorf("hits[1] = %+v, want {0,6,11}", hits[1])
+	if hits[1] != (Hit{LineIdx: 0, ByteA: 8, ByteC: 11}) {
+		t.Errorf("hits[1] = %+v, want {0,8,11} (literal second 'the')", hits[1])
 	}
 }
 

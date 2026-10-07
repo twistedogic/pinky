@@ -799,38 +799,41 @@ func TestFileNav_SearchActivatesAndFilters(t *testing.T) {
 	}
 }
 
-// TestFileNav_SearchFuzzySubsequence: fuzzy matching is
-// subsequence (chars in order), case-insensitive. "mig" matches
-// "src/main.go" (m, i, g all present in order) but not "src/pkg".
-func TestFileNav_SearchFuzzySubsequence(t *testing.T) {
+// TestFileNav_SearchLiteralSubstring: search is a literal
+// case-insensitive substring of each entry's path. "main"
+// matches "src/main.go" (substring present) but "mig" does
+// not (m, i, g are in order but not contiguous).
+func TestFileNav_SearchLiteralSubstring(t *testing.T) {
 	m := *attachFileFixture(t)
 	upd, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	m = upd.(model)
-	for _, r := range "MIG" {
+	for _, r := range "main" {
 		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		m = upd.(model)
 	}
 	visible := m.visibleFileEntries()
 	if len(visible) != 1 {
-		t.Fatalf("expected 1 match for 'MIG'; got %d (%v)", len(visible), visiblePathList(visible))
+		t.Fatalf("expected 1 match for 'main'; got %d (%v)", len(visible), visiblePathList(visible))
 	}
 	if visible[0].Path != "src/main.go" {
 		t.Errorf("expected src/main.go; got %q", visible[0].Path)
 	}
 
-	// "xyz" matches nothing.
+	// "MIG" (uppercase, no contiguous substring) matches nothing.
 	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = upd.(model)
 	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = upd.(model)
 	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = upd.(model)
-	for _, r := range "xyz" {
+	upd, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = upd.(model)
+	for _, r := range "MIG" {
 		upd, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		m = upd.(model)
 	}
 	if v := m.visibleFileEntries(); len(v) != 0 {
-		t.Errorf("expected 0 matches for 'xyz'; got %v", visiblePathList(v))
+		t.Errorf("expected 0 matches for 'MIG' (no contiguous substring); got %v", visiblePathList(v))
 	}
 }
 

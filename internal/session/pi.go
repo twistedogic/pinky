@@ -140,35 +140,17 @@ func parseLsofJSONL(lsofOut, root string) string {
 }
 
 func (s *piSource) NewMessages() ([]Message, error) {
-	f, err := os.Open(s.path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	if _, err := f.Seek(s.offset, 0); err != nil {
-		return nil, err
-	}
-
-	var out []Message
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), scannerMaxLine)
-	for sc.Scan() {
+	return tailJSONL(s.path, &s.offset, func(line []byte) []Message {
 		var raw piEntry
-		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
-			continue
+		if !extractJSON(line, &raw) {
+			return nil
 		}
 		if raw.Type != "message" || raw.Message == nil {
-			continue
+			return nil
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, raw.Timestamp)
-		msgs := extractPi(raw.Message, ts)
-		out = append(out, msgs...)
-	}
-
-	end, _ := f.Seek(0, os.SEEK_CUR)
-	s.offset = end
-	return out, sc.Err()
+		return extractPi(raw.Message, ts)
+	})
 }
 
 // extractPi pulls assistant text and user text out of a pi message.

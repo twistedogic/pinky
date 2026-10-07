@@ -1,8 +1,6 @@
 package session
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -112,50 +110,34 @@ func codexByCwd() (string, error) {
 }
 
 func (s *codexSource) NewMessages() ([]Message, error) {
-	f, err := os.Open(s.path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	if _, err := f.Seek(s.offset, 0); err != nil {
-		return nil, err
-	}
-
-	var out []Message
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), scannerMaxLine)
-	for sc.Scan() {
+	return tailJSONL(s.path, &s.offset, func(line []byte) []Message {
 		var raw codexEntry
-		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
-			continue
+		if !extractJSON(line, &raw) {
+			return nil
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, raw.Timestamp)
-		if raw.Type != "response_item" || raw.Payload == nil {
-			continue
+		if raw.Type != "response_item" || raw.Payload == nil ||
+			raw.Payload.Type != "message" {
+			return nil
 		}
-		if raw.Payload.Type != "message" {
-			continue
-		}
-		switch raw.Payload.Role {
-		case "assistant":
-			for _, c := range raw.Payload.Content {
-				if (c.Type == "output_text" || c.Type == "text") && c.Text != "" {
-					out = append(out, Message{Role: RoleAssistant, Text: c.Text, Ts: ts})
-				}
+		var out []Message
+		for _, c := range raw.Payload.Content {
+			if c.Text == "" {
+				continue
 			}
-		case "user":
-			for _, c := range raw.Payload.Content {
-				if (c.Type == "input_text" || c.Type == "text") && c.Text != "" {
-					out = append(out, Message{Role: RoleUser, Text: c.Text, Ts: ts})
-				}
+			var role Role
+			switch {
+			case raw.Payload.Role == "assistant" && (c.Type == "output_text" || c.Type == "text"):
+				role = RoleAssistant
+			case raw.Payload.Role == "user" && (c.Type == "input_text" || c.Type == "text"):
+				role = RoleUser
+			default:
+				continue
 			}
+			out = append(out, Message{Role: role, Text: c.Text, Ts: ts})
 		}
-	}
-
-	end, _ := f.Seek(0, os.SEEK_CUR)
-	s.offset = end
-	return out, sc.Err()
+		return out
+	})
 }
 
 // codexEntry mirrors codex rollout JSONL lines.

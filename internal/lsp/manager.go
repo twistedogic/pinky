@@ -28,24 +28,11 @@ const unavailableWindow = 30 * time.Second
 // directly so ServerStatus doesn't have to translate a parallel
 // enum.
 type clientEntry struct {
-	client *powernap.Client
-	state  ServerState
-	err    error
-}
-
-// ErrServerMissing signals that the language server binary was
-// not on PATH. The model layer surfaces the InstallHint for the
-// footer.
-type ErrServerMissing struct {
-	Server string
-	Hint   string
-}
-
-func (e *ErrServerMissing) Error() string {
-	if e.Hint == "" {
-		return fmt.Sprintf("%s not found on PATH", e.Server)
-	}
-	return fmt.Sprintf("%s not found — install with: %s", e.Server, e.Hint)
+	client  *powernap.Client
+	state   ServerState
+	err     error
+	command string // binary on PATH; used to build the install hint when state is ServerMissing
+	langID  string // canonical language id (e.g. "go"); passed to powernap's DidOpen
 }
 
 // Manager owns the powernap clients, the 30 s unavailable map,
@@ -111,7 +98,7 @@ func (m *Manager) nextRequestID() int64 {
 // extension → language map of our own.
 func serverForPath(path string) (langID string, cmd string, ok bool) {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
-	for _, preferred := range canonicalServer(ext) {
+	for _, preferred := range canonicalServer[ext] {
 		if server, found := defaultRegistry.GetServer(preferred); found && hasFiletype(server, ext) {
 			return preferred, server.Command, true
 		}
@@ -124,25 +111,24 @@ func serverForPath(path string) (langID string, cmd string, ok bool) {
 	return "", "", false
 }
 
-// canonicalServer returns the language servers pinky prefers for
-// ext, in priority order. Sourced from the spec ("gopls,
-// typescript-language-server, rust-analyzer, clangd,
-// jedi-language-server by default"). ponytail: hard-coded table;
-// adding a new language here is a one-liner.
-func canonicalServer(ext string) []string {
-	switch ext {
-	case "go":
-		return []string{"gopls"}
-	case "ts", "tsx", "js", "jsx", "javascript", "typescript":
-		return []string{"typescript-language-server"}
-	case "rs":
-		return []string{"rust-analyzer"}
-	case "c", "cpp", "h", "hpp":
-		return []string{"clangd"}
-	case "py":
-		return []string{"basedpyright", "jedi-language-server", "pyright"}
-	}
-	return nil
+// canonicalServer is the lookup table of language servers pinky
+// prefers per file extension, in priority order. Sourced from
+// the spec. ponytail: hard-coded table; adding a new language
+// is one line.
+var canonicalServer = map[string][]string{
+	"go":         {"gopls"},
+	"ts":         {"typescript-language-server"},
+	"tsx":        {"typescript-language-server"},
+	"js":         {"typescript-language-server"},
+	"jsx":        {"typescript-language-server"},
+	"javascript": {"typescript-language-server"},
+	"typescript": {"typescript-language-server"},
+	"rs":         {"rust-analyzer"},
+	"c":          {"clangd"},
+	"cpp":        {"clangd"},
+	"h":          {"clangd"},
+	"hpp":        {"clangd"},
+	"py":         {"basedpyright", "jedi-language-server", "pyright"},
 }
 
 func hasFiletype(s *pconfig.ServerConfig, ext string) bool {
@@ -182,7 +168,7 @@ func installHint(server string) string {
 // in the entry's state; the Manager surfaces them to the model
 // via ErrServerMissing / generic error replies.
 func (m *Manager) startServer(ctx context.Context, langID, command string) *clientEntry {
-	entry := &clientEntry{state: ServerStarting}
+	entry := &clientEntry{state: ServerStarting, command: command, langID: langID}
 	m.clients[langID] = entry
 
 	rootURI := "file://" + m.workDir
@@ -196,7 +182,7 @@ func (m *Manager) startServer(ctx context.Context, langID, command string) *clie
 		// *fs.PathError or *exec.Error.
 		if isMissingBinary(err) {
 			entry.state = ServerMissing
-			entry.err = &ErrServerMissing{Server: command, Hint: installHint(command)}
+			entry.err = fmt.Errorf("%s not found on PATH", command)
 			m.unavailable[langID] = time.Now().Add(unavailableWindow)
 			return entry
 		}
@@ -261,9 +247,10 @@ func (m *Manager) ensureServer(ctx context.Context, path string) (*clientEntry, 
 	m.mu.Lock()
 	if until, missing := m.unavailable[langID]; missing {
 		if time.Now().Before(until) {
-			cmd := command
 			m.mu.Unlock()
-			return nil, langID, &ErrServerMissing{Server: cmd, Hint: installHint(cmd)}
+			// Synthesise a stub entry so the caller can read
+			// the command name and surface the install hint.
+			return &clientEntry{state: ServerMissing, command: command, langID: langID}, langID, nil
 		}
 		delete(m.unavailable, langID)
 	}
@@ -322,16 +309,17 @@ func uriForPath(p string) string {
 }
 
 // DidOpen notifies the server that path is open. content is the
-// full file content; the language is auto-detected from path's
-// extension. No-op when no server is registered for the language
-// or when the server is currently unavailable.
+// full file content. No-op when no server is registered for the
+// language or when the server is currently unavailable.
 func (m *Manager) DidOpen(ctx context.Context, path, content string) {
 	entry, _, err := m.ensureServer(ctx, path)
 	if err != nil || entry == nil || entry.state != ServerReady || entry.client == nil {
 		return
 	}
-	lang := string(powernap.DetectLanguage(path))
-	_ = entry.client.NotifyDidOpenTextDocument(ctx, uriForPath(path), lang, 1, content)
+	// ensureServer already resolved the language id from the
+	// path's extension via serverForPath; reuse it instead of
+	// re-detecting.
+	_ = entry.client.NotifyDidOpenTextDocument(ctx, uriForPath(path), entry.langID, 1, content)
 }
 
 // DidClose notifies the server that path is closing. No-op when
@@ -359,7 +347,13 @@ func (m *Manager) Dispatch(ctx context.Context, id int64, kind Kind, path string
 	res := Result{ID: id, Kind: kind}
 	entry, _, err := m.ensureServer(ctx, path)
 	if err != nil {
-		assignErr(&res, err)
+		res.Err = err
+		m.deliver(res)
+		return
+	}
+	if entry.state == ServerMissing {
+		res.ErrServerMissing = true
+		res.InstallHint = installHint(entry.command)
 		m.deliver(res)
 		return
 	}
@@ -384,19 +378,6 @@ func (m *Manager) Dispatch(ctx context.Context, id int64, kind Kind, path string
 	m.deliver(res)
 }
 
-// assignErr copies an *ErrServerMissing onto res so the model layer
-// can render the install hint and the 30 s quiet window.
-func assignErr(res *Result, err error) {
-	var miss *ErrServerMissing
-	if errors.As(err, &miss) {
-		res.ErrServerMissing = true
-		res.InstallHint = miss.Hint
-		res.Err = err
-		return
-	}
-	res.Err = err
-}
-
 // deliver pushes res on the result channel. Non-blocking — if the
 // channel buffer is full the reply is dropped, matching the
 // bridge's "superseded requests are silent" behaviour.
@@ -404,19 +385,5 @@ func (m *Manager) deliver(res Result) {
 	select {
 	case m.requests <- res:
 	default:
-	}
-}
-
-// Shutdown shuts down every running client and clears the maps.
-// Safe to call multiple times.
-func (m *Manager) Shutdown(ctx context.Context) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for langID, entry := range m.clients {
-		if entry.client != nil {
-			_ = entry.client.Shutdown(ctx)
-			_ = entry.client.Exit()
-		}
-		delete(m.clients, langID)
 	}
 }

@@ -3,86 +3,56 @@ package render
 import (
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
-// Hit is one subsequence match of a search query against a source
-// line. (LineIdx, ByteA, ByteC) is in source-line byte space:
-// ByteA inclusive, ByteC exclusive. Byte offsets are valid in
-// lines[LineIdx].
+// Hit is one literal-string match of a search query against a
+// source line. (LineIdx, ByteA, ByteC) is in source-line byte
+// space: ByteA inclusive, ByteC exclusive. Byte offsets are
+// valid in lines[LineIdx].
 type Hit struct {
 	LineIdx int
 	ByteA   int
 	ByteC   int
 }
 
-// FindHits returns every non-overlapping left-to-right match of
-// query in lines, in document order (line asc, byte asc). The
-// matcher is the same subsequence rule pinky's file navigator
-// `/` uses: every rune of (case-folded) query appears in
-// (case-folded) lines[i] in order. Empty query or nil lines
-// returns nil.
+// FindHits returns every non-overlapping left-to-right literal
+// substring match of query in lines, in document order (line
+// asc, byte asc). Matching is case-insensitive. Empty query or
+// nil lines returns nil.
 //
-// Multi-byte runes are matched rune-by-rune (so a query of "λ"
-// matches a line "λ-foo" at the correct byte range, not at some
-// byte in the middle of λ's UTF-8 encoding).
+// Literal substring means the query bytes (after case-folding)
+// must appear as a contiguous run in each line — not as a
+// subsequence. So "abc" matches "xxabcxx" but not "axxbc". This
+// matches what users typing a query into a TUI search expect:
+// each typed rune is a character they want to find, not a fuzzy
+// signal. Multi-byte runes are matched byte-for-byte against the
+// case-folded line.
 func FindHits(query string, lines []string) []Hit {
 	if query == "" || len(lines) == 0 {
 		return nil
 	}
-	qr := []rune(strings.ToLower(query))
-	qlen := len(qr)
+	qlen := len(query)
+	lowq := strings.ToLower(query)
 	var hits []Hit
 	for i, line := range lines {
 		if line == "" {
 			continue
 		}
-		// Walk the line once, collecting (lowered rune, bytePos)
-		// pairs so the matcher can compare runes and emit byte
-		// ranges in the same pass.
-		type rp struct {
-			r   rune
-			pos int // byte offset of this rune in line
-			sz  int // byte size of this rune
-		}
-		var rps []rp
-		for j := 0; j < len(line); {
-			r, sz := utf8.DecodeRuneInString(line[j:])
-			if sz <= 0 {
-				sz = 1
-				r = rune(line[j])
+		low := strings.ToLower(line)
+		// Walk the line; on every match, emit a hit and advance
+		// past the match so overlapping occurrences are not
+		// emitted (the next search starts at low[ByteC]).
+		off := 0
+		for {
+			idx := strings.Index(low[off:], lowq)
+			if idx < 0 {
+				break
 			}
-			rps = append(rps, rp{r: unicode.ToLower(r), pos: j, sz: sz})
-			j += sz
-		}
-		qi := 0
-		runStart := -1
-		for _, p := range rps {
-			// Standard greedy subsequence match: if we're mid-match
-			// and this rune advances the current query position,
-			// take it. Otherwise, if the rune could start a new
-			// match (only when no match is in progress), start one.
-			// We do NOT abandon a partial match on a qr[0] hit —
-			// doing so loses the leftmost occurrence (e.g. "alpha"
-			// in "alpha beta alpha" would miss the first "alpha").
-			if qi > 0 && p.r == qr[qi] {
-				qi++
-				if qi == qlen {
-					hits = append(hits, Hit{LineIdx: i, ByteA: runStart, ByteC: p.pos + p.sz})
-					qi = 0
-					runStart = -1
-				}
-				continue
-			}
-			if qi == 0 && p.r == qr[0] {
-				qi = 1
-				runStart = p.pos
-				if qlen == 1 {
-					hits = append(hits, Hit{LineIdx: i, ByteA: runStart, ByteC: p.pos + p.sz})
-					qi = 0
-					runStart = -1
-				}
+			start := off + idx
+			hits = append(hits, Hit{LineIdx: i, ByteA: start, ByteC: start + qlen})
+			off = start + qlen
+			if off >= len(line) {
+				break
 			}
 		}
 	}

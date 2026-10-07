@@ -26,19 +26,18 @@ func TestFileSearch_NCyclesAndResetsPreferred(t *testing.T) {
 	if m.fileViewer.preferred != 0 {
 		t.Errorf("preferred = %d, want 0", m.fileViewer.preferred)
 	}
-	// n: advance to second "alpha" hit. With the greedy
-	// subsequence matcher, the second hit on line 2 starts at
-	// the 'a' of "beta" (byte 3) and runs through "lpha" from
-	// the second "alpha" — the start byte is 3, not 5.
+	// n: advance to second "alpha" hit at line 2 byte 5
+	// (literal substring match — not the spanning subsequence
+	// the old matcher produced).
 	m = keyModelVal(t, m, "n")
 	if m.fileViewer.cursor != 2 {
 		t.Errorf("after n: cursor = %d, want 2", m.fileViewer.cursor)
 	}
-	if m.fileViewer.charPos != 3 {
-		t.Errorf("after n: charPos = %d, want 3 (greedy: 'a' of 'beta' + 'lpha')", m.fileViewer.charPos)
+	if m.fileViewer.charPos != 5 {
+		t.Errorf("after n: charPos = %d, want 5 (literal second 'alpha' on line 2)", m.fileViewer.charPos)
 	}
-	if m.fileViewer.preferred != 3 {
-		t.Errorf("after n: preferred = %d, want 3 (reset to hit)", m.fileViewer.preferred)
+	if m.fileViewer.preferred != 5 {
+		t.Errorf("after n: preferred = %d, want 5 (reset to hit)", m.fileViewer.preferred)
 	}
 	// n: advance to third "alpha" at line 3, byte 0.
 	m = keyModelVal(t, m, "n")

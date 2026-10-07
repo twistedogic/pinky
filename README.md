@@ -193,9 +193,9 @@ file extension and lazily spawned on first use, so the first
 query for a new language takes ~1 s and a missing server shows
 a one-line install hint.
 
-`/` opens a fuzzy search prompt in the file content. The
-matcher is a subsequence rule (every rune of the query appears
-in the source in order, case-insensitive). Every match is
+`/` opens a search prompt in the file content. The matcher is
+a case-insensitive literal substring — the query bytes must
+appear as a contiguous run in the source. Every match is
 highlighted with a dim background; the current match is the
 cursor's inverted-block style. `n`/`N` cycle through matches
 and reset the `preferred` column to each hit's byte.

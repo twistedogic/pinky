@@ -144,7 +144,7 @@ type fileViewer struct {
 	charPos   int      // ponytail: byte offset into cursor line (rune-aligned)
 	preferred int      // last intended column, survives j/k
 	visual    fileSelection
-	lineIndex []render.FileLine // parallel to lines
+	lineIndex []bool // parallel to lines; true if a file-kind comment covers the line
 	viewport  viewport.Model    // ponytail: scrollable view of the rendered file
 }
 
@@ -406,22 +406,28 @@ func (m *model) idle(src session.Source, hist *history.History, pane string) {
 	// Empty on failure (no tmux server).
 	if pane != "" {
 		if cwd, err := session.PaneCwd(pane); err == nil {
-			m.fileRoot = cwd
-			// ponytail: one LSP Manager per pane session, owned
-			// by the model. Lazy-spawns servers on first
-			// file-viewer query; no goroutines fire until then.
-			mgr := pinkylsp.New(cwd)
-			m.lsp = mgr
-			m.lsphub = pinkylsp.NewBridge(mgr)
+			m.setupForCwd(cwd)
 		}
 	}
+}
 
+// setupForCwd wires every per-workspace field (fileRoot, LSP
+// manager + bridge, todo storage path) and refreshes the todo
+// list. Called by idle() when the tmux pane has a cwd, and by
+// standalone() with os.Getwd(). Extracted so the two paths
+// don't drift.
+func (m *model) setupForCwd(cwd string) {
+	m.fileRoot = cwd
+	// ponytail: one LSP Manager per pane session, owned by the
+	// model. Lazy-spawns servers on first file-viewer query; no
+	// goroutines fire until then.
+	mgr := pinkylsp.New(cwd)
+	m.lsp = mgr
+	m.lsphub = pinkylsp.NewBridge(mgr)
 	// Wire todo storage: ~/.local/share/pinky/<base(cwd)>/todos.json.
 	// No XDG fallback per the add-todo-tab change.
-	if m.fileRoot != "" {
-		m.todoPath = todoStoragePath(m.fileRoot)
-		m.refreshTodos()
-	}
+	m.todoPath = todoStoragePath(cwd)
+	m.refreshTodos()
 }
 
 // standalone drops pinky into the cwd file navigator when there is
@@ -436,12 +442,7 @@ func (m *model) standalone() {
 		m.state = stateError
 		return
 	}
-	m.fileRoot = cwd
-	m.todoPath = todoStoragePath(cwd)
-	m.refreshTodos()
-	mgr := pinkylsp.New(cwd)
-	m.lsp = mgr
-	m.lsphub = pinkylsp.NewBridge(mgr)
+	m.setupForCwd(cwd)
 	m.tab = tabFiles
 	m.enterFileNav()
 }
@@ -1184,13 +1185,18 @@ func (m model) handleFileSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // moveFileCursor clamps fileCursor into [0, len(visible)-1] after
 // applying delta. Called from j/k handlers in handleFileNavKey.
 func (m *model) moveFileCursor(delta int) {
-	visible := m.visibleFileEntries()
-	n := len(visible)
+	m.fileCursor = clampCursor(m.fileCursor, len(m.visibleFileEntries()), delta)
+}
+
+// clampCursor moves *cur by delta in the inclusive range
+// [0, n-1]. On an empty range, sets *cur to 0. Used by the
+// file navigator and the todo list, which share the same
+// clamp-and-reset semantics (unlike the picker, which wraps).
+func clampCursor(cur, n, delta int) int {
 	if n == 0 {
-		m.fileCursor = 0
-		return
+		return 0
 	}
-	m.fileCursor = min(max(m.fileCursor+delta, 0), n-1)
+	return min(max(cur+delta, 0), n-1)
 }
 
 // sendToPane is the package-level hook for the actual tmux
@@ -2153,12 +2159,7 @@ func (m model) handleTodoListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // moveTodoCursor clamps m.todoCursor into [0, len-1].
 func (m *model) moveTodoCursor(delta int) {
-	n := len(m.todos)
-	if n == 0 {
-		m.todoCursor = 0
-		return
-	}
-	m.todoCursor = min(max(m.todoCursor+delta, 0), n-1)
+	m.todoCursor = clampCursor(m.todoCursor, len(m.todos), delta)
 }
 
 // handleTodoEditKey drives the todo edit view. Enter commits the
@@ -2794,7 +2795,6 @@ var (
 // chrome (header cwd, picker row labels). Same color as
 // statusBarStyle foreground so the dim palette stays consistent.
 var dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-var strikeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Strikethrough(true)
 
 // headerStyle / selectedStyle / normalStyle are the recurring
 // row-render trio: bold magenta for the section header, bold
@@ -2820,14 +2820,12 @@ var (
 // tries in order before falling back to a 2-line split on `/`.
 var headerAbbrevLevels = []int{2, 1}
 
-// hoverModalBoxStyle paints the hover pop-up as a rounded cyan
-// border with one-cell padding. The body itself is rendered in
-// cyan italic so the box reads as related to the old footer but
-// visually distinct from the file body underneath.
-var hoverModalBoxStyle = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("51")).
-	Padding(0, 1)
+// hoverModalBoxStyle (inlined at the call site) paints the hover
+// pop-up as a rounded cyan border with one-cell padding. The body
+// itself is rendered in cyan italic so the box reads as related
+// to the old footer but visually distinct from the file body
+// underneath. Defined inline at the one call site in
+// overlayHoverModal.
 
 // hoverModalKeyMap restricts the modal's viewport to scroll keys
 // only. The viewport's default KeyMap binds h/l/b/f/space/etc.
@@ -2956,7 +2954,8 @@ func (m model) View() tea.View {
 		var navParts []string
 		navParts = append(navParts, header, m.viewport.View())
 		if m.navSearch.active {
-			navParts = append(navParts, m.navSearchPromptView())
+			navParts = append(navParts,
+				dimStyle.Render("/"+string(m.navSearch.query)+"▏"))
 		}
 		navParts = append(navParts, helpView, m.statusLine())
 		content = m.fillWidth(lipgloss.JoinVertical(lipgloss.Left, navParts...))
@@ -3265,7 +3264,7 @@ func (m model) renderFileContent() string {
 	for i, content := range m.fileViewer.lines {
 		ln := i + 1
 		var gutter string
-		if i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i].HasComment {
+		if i < len(m.fileViewer.lineIndex) && m.fileViewer.lineIndex[i] {
 			gutter = yellow + "▍" + "\x1b[0m"
 		} else {
 			gutter = " "
@@ -3312,7 +3311,7 @@ func (m model) todoListView() string {
 		style := dimStyle
 		if item.Done {
 			box = "[x]"
-			style = strikeStyle
+			style = dimStyle.Strikethrough(true)
 		}
 		if i == m.todoCursor {
 			marker = "▶"
@@ -3338,15 +3337,6 @@ func (m model) todoEditView() string {
 // `lines N-M of K` position indicator) followed by the file
 // viewport's visible window. The header sits outside the viewport
 // so the indicator stays visible while the body scrolls.
-// navSearchPromptView renders the one-line `/<query>▏` prompt
-// shown at the bottom of the message view while the search input
-// is open. The half-block cursor and the query text use the
-// dim style so the prompt reads as transient input.
-func (m model) navSearchPromptView() string {
-	q := dimStyle.Render("/" + string(m.navSearch.query) + "▏")
-	return q
-}
-
 func (m model) fileViewView() string {
 	header := fmt.Sprintf("file — %s", m.fileViewer.path)
 	if len(m.fileViewer.lines) > m.fileViewer.viewport.Height() {
@@ -3371,11 +3361,13 @@ func (m model) fileViewView() string {
 // this footer only renders the install hint when an LSP server is
 // missing.
 func maybeHoverFooter(m model) string {
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("228")).Italic(true)
-	if m.missingServerHint != "" {
-		return hintStyle.Render("ⓘ " + m.missingServerHint)
+	if m.missingServerHint == "" {
+		return ""
 	}
-	return ""
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("228")).
+		Italic(true).
+		Render("ⓘ " + m.missingServerHint)
 }
 
 // renderHoverModal builds the bordered pop-up box from the
@@ -3386,7 +3378,11 @@ func (m model) renderHoverModal() string {
 	if !m.hoverModal.visible {
 		return ""
 	}
-	return hoverModalBoxStyle.Render(m.hoverModal.viewport.View())
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("51")).
+		Padding(0, 1).
+		Render(m.hoverModal.viewport.View())
 }
 
 // overlayHoverModal composites the hover pop-up onto the rendered

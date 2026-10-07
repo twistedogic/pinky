@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,26 +59,24 @@ func TestInstallHint_Gopls(t *testing.T) {
 
 
 // TestManager_MissingServerMarksUnavailable: ensureServer for a
-// missing-binary path returns ErrServerMissing and records the
-// language in the unavailable map.
+// missing-binary path records the language in the unavailable
+// map and surfaces the missing state via the entry.
 func TestManager_MissingServerMarksUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir)
 	ctx := context.Background()
 	// Use a path that has a registered language but whose binary
-	// is guaranteed missing: rename PATH temporarily so exec.LookPath
-	// fails for every binary.
+	// is guaranteed missing: empty PATH so exec.LookPath fails.
 	t.Setenv("PATH", "")
 	entry, langID, err := m.ensureServer(ctx, filepath.Join(dir, "x.go"))
 	if err == nil {
 		t.Fatal("expected error when gopls is missing from PATH")
 	}
-	var miss *ErrServerMissing
-	if !errors.As(err, &miss) {
-		t.Errorf("expected ErrServerMissing; got %v", err)
-	}
+	// First call: startServer path. The error carries the message;
+	// the entry is nil because ensureServer only synthesises a stub
+	// on the unavailable-window fast path (see below).
 	if entry != nil {
-		t.Errorf("expected nil entry on missing-binary; got %+v", entry)
+		t.Errorf("expected nil entry on first missing-binary; got %+v", entry)
 	}
 	if langID == "" {
 		t.Errorf("expected non-empty langID")
@@ -92,8 +89,8 @@ func TestManager_MissingServerMarksUnavailable(t *testing.T) {
 }
 
 // TestManager_MissingServerQuietWindow: a second ensureServer
-// during the unavailable window returns the same ErrServerMissing
-// without retrying the lookup. Verifies the spec's 30 s quiet rule.
+// during the unavailable window returns the missing state without
+// retrying the lookup. Verifies the spec's 30 s quiet rule.
 func TestManager_MissingServerQuietWindow(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir)
@@ -102,12 +99,11 @@ func TestManager_MissingServerQuietWindow(t *testing.T) {
 	_, langID, _ := m.ensureServer(ctx, filepath.Join(dir, "x.go"))
 
 	// Two more ensureServer calls during the window should also
-	// return missing (no real retry).
+	// surface missing (no real retry).
 	for i := 0; i < 2; i++ {
-		_, _, err := m.ensureServer(ctx, filepath.Join(dir, "x.go"))
-		var miss *ErrServerMissing
-		if !errors.As(err, &miss) {
-			t.Errorf("call %d: expected ErrServerMissing; got %v", i+1, err)
+		entry, _, _ := m.ensureServer(ctx, filepath.Join(dir, "x.go"))
+		if entry == nil || entry.state != ServerMissing {
+			t.Errorf("call %d: expected ServerMissing entry; got %+v", i+1, entry)
 		}
 	}
 	// The unavailable entry must exist (otherwise the spec's
@@ -127,11 +123,11 @@ func TestManager_MissingServerQuietWindow(t *testing.T) {
 // must not panic and must not leak goroutines (best-effort).
 func TestManager_ShutdownIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	m := New(dir)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	m.Shutdown(ctx)
-	m.Shutdown(ctx)
+	_ = New(dir)
+	// ponytail: Shutdown was a no-op (no callers in the model
+	// layer). The "safe to call multiple times" doc was true
+	// because there was nothing to shut down. Test removed; if
+	// pinky ever grows a shutdown path, add a test for that path.
 }
 
 // TestManager_ServerStatus_UnknownExt: a path whose extension
